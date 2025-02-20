@@ -145,8 +145,6 @@ def LeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0):
             for j in range(0, len(Z_t)):
                 
                 Z[nan_index] = 0;
-                
-            
             try:
                 m = np.mean(Pt[i-1]-Pt[i-2])
                 if abs(m)<10**(-3) and i>2:
@@ -307,7 +305,7 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
                 nan_index = np.where(np.isnan(y[:,t]));
                 no_nan_index = np.where(~np.isnan(y[:,t]));
                 
-                y1 = np.zeros(np.shape(y[:,t]));
+                y1 = np.zeros(np.shape(copy(y[:,t])));
                 y1[no_nan_index] = copy(y[:,t][no_nan_index]);
                 y1 = np.reshape(y1, (len(y1),1));
                 
@@ -320,7 +318,7 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
                 S = S + x @ x.T + V_smooth[:,:,t];
                 S10 = S10 + x1 @ x1.T + Vt_smooth[:,:,t];
                 
-                auxY = y1;
+                auxY = np.copy(y1);
                 
                 auxC = np.zeros(np.shape(C));
                 auxC[no_nan_index] = copy(C[no_nan_index]);
@@ -663,7 +661,7 @@ def VAR1_em_fit(A0, H0, Q0, yt, maxiter=200, tol=10**-6):
             x0 = np.reshape(x_smooth[t], (n_var, 1))
             x1 = np.reshape(x_smooth[t-1], (n_var, 1))
             
-            y = np.reshape(yt[t], (n_var, 1))
+            y = np.reshape(copy(yt[t]), (n_var, 1))
             
             S += x0 @ x0.T + V_smooth[t]
             S10 += x0 @ x1.T + Vt_smooth[t]
