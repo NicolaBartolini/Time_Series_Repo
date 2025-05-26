@@ -15,6 +15,20 @@ from scipy.optimize import minimize, Bounds, LinearConstraint
 from Time_Series_Result_Class import FitResultObj
 from scipy.stats import norm, norminvgauss
 
+
+def GaussianKernel(x):
+    
+    return 1/np.sqrt(2*pi) * np.exp(-.5 * x**2)
+
+def arctan_kernel(x):
+    
+    return np.arctan(x) * 2/pi + 1
+
+def inv_arctan_kernel(y):
+    
+    return np.tan((y - 1) * (pi/2))
+
+
 class GARCH:
     
     def __init__(self, p=1, q=1, lags=0, malags=0, density='normal', **kwards):
@@ -75,6 +89,7 @@ class GARCH:
         betas = default_inputs['betas']
         omega = default_inputs['omega']
         alphas = default_inputs['alphas']
+        phis = default_inputs['phis']
         DF = default_inputs['DF']
         a = default_inputs['a']
         b = default_inputs['b']
@@ -233,6 +248,7 @@ class GARCH:
                 result += -.5*np.log(2*pi) - 0.5*np.log(sigma_square[i]) -.5*eps[i]**2
             
             elif self.density=='tstudent':
+                
                 A = scipy.special.gamma(.5*(DF+1))/(np.sqrt(pi*DF*sigma_square[i])*scipy.special.gamma(DF*.5))
                 A = np.log(A);
                 
@@ -416,10 +432,20 @@ class GARCH:
         loglike = -res.fun
         hessian_matrix = jac.T @ jac
         
+        params_std = np.sqrt(np.diag(hessian_matrix))
+        
+        t_statistics = params_result / params_std
+        
+        p_values = scipy.stats.t.sf(t_statistics, len(yt)-len(params_std)-1)
+        
         sigma_t_imp, eps = self.get_vol(yt.flatten(), mu=mu, omega=omega, 
                                          alphas=alphas, phis=phis, betas=betas)
         
-        result = FitResultObj(params=df_params_result, hess=hessian_matrix,
+        df_params_pvalues = pd.DataFrame(data=p_values, index=index)
+        
+        
+        result = FitResultObj(params=df_params_result, pvalues = df_params_pvalues,
+                              hess=hessian_matrix,
                               grad=jac, Loglike=loglike, hist_vol=sigma_t_imp,
                               resid=eps)
         
@@ -519,6 +545,7 @@ class beta_tGARCH:
         for i in range(m, len(yt)):
             
             sigma_square[i] = omega + np.sum(alphas*(t_score[i-self.p:i]-sigma_square[i-self.q:i])) + np.sum(phis*sigma_square[i-self.q:i]);
+            sigma_square[i] = max(sigma_square[i], 1e-5)
             
             if self.lags==0:
                 
@@ -600,11 +627,21 @@ class beta_tGARCH:
             omega = np.exp(params[1])
             alphas = np.exp(params[2 : 2 + self.p])
             phis = np.exp(params[2 + self.p : 2 + self.p + self.q])
+            DoF = np.exp(params[2 + self.p + self.q])
+            
+        # if parametrization==1:
+            
+        #     mu = params[0]
+        #     omega = arctan_kernel(params[1])
+        #     alphas = arctan_kernel(params[2 : 2 + self.p])
+        #     phis = arctan_kernel(params[2 + self.p : 2 + self.p + self.q])
+            
         else:
             mu = params[0]
             omega = params[1]
             alphas = params[2 : 2 + self.p]
             phis = params[2 + self.p : 2 + self.p + self.q]
+            DoF = params[2 + self.p + self.q]
         
         if self.lags>=1:
             betas = params[2 + self.p + self.q : 2 + self.p + self.q + self.lags]
@@ -626,10 +663,11 @@ class beta_tGARCH:
         else:
             regularization_par = 1e-4 * (omega**2 + np.sum(alphas**2) + np.sum(phis**2) + DoF**2)
             return -self.loglike(yt, mu, betas, omega, alphas, phis, DoF, sigma_square0) + regularization_par
+       
         # return -self.loglike(yt, mu, betas, omega, alphas, phis, DoF, sigma_square0) + regularization
         # return -self.loglike(yt, mu, betas, omega, alphas, phis, DoF, sigma_square0) 
 
-    def hessian(self, params, yt, dx=10**(-6)):
+    def hessian(self, params, yt, DoF, dx=10**(-6)):
         
         n = len(params)
         result = np.empty((n,n))
@@ -645,10 +683,10 @@ class beta_tGARCH:
                     par_m = copy(params)
                     par_m[i] -= dx
                     
-                    dfp = -self.objfun(par_p, yt)
-                    dfm = -self.objfun(par_m, yt)
+                    dfp = -self.objfun(par_p, yt, DoF)
+                    dfm = -self.objfun(par_m, yt, DoF)
                     
-                    f = -self.objfun(params, yt)
+                    f = -self.objfun(params, yt, DoF)
                     
                     result[i,i] = (dfp -2*f + dfm)/(dx**2)
                 
@@ -670,10 +708,10 @@ class beta_tGARCH:
                     par_mp[i] -= dx
                     par_mp[j] += dx
                     
-                    dfpp = -self.objfun(par_pp, yt)
-                    dfmm = -self.objfun(par_mm, yt)
-                    dfpm = -self.objfun(par_pm, yt)
-                    dfmp = -self.objfun(par_mp, yt)
+                    dfpp = -self.objfun(par_pp, yt, DoF)
+                    dfmm = -self.objfun(par_mm, yt, DoF)
+                    dfpm = -self.objfun(par_pm, yt, DoF)
+                    dfmp = -self.objfun(par_mp, yt, DoF)
                     
                     result[i,j] = (dfpp -dfpm -dfmp + dfmm)/(4*dx**2)
         
@@ -683,23 +721,65 @@ class beta_tGARCH:
     def fit(self, params, yt, robust=False, parametrization=0, regularization=0, method='BFGS'):
         
         if parametrization==0:
-        
-            res = minimize(self.objfun, params, args=(yt, parametrization, regularization), 
-                            method='BFGS', jac='2-points',
-                            options={'disp':False})
+            
+            if method=='BFGS':
+                # res = minimize(self.objfun, params, args=(yt, parametrization, regularization), 
+                #                 method='BFGS', jac='2-points',
+                #                 options={'disp':False})
+                
+                res = minimize(self.objfun, params, args=(yt, parametrization, regularization), 
+                                method='BFGS', jac='2-points',
+                                options={'disp':False})
+                
+            elif method=='nelder-mead':
+                # res = minimize(self.objfun, params, args=(yt, parametrization, regularization), 
+                #                 method='nelder-mead',
+                #                 options={'disp':False})
+                
+                res = minimize(self.objfun, params, args=(yt, parametrization, regularization), 
+                                method=method,
+                                options={'disp':False})
+                
+            elif method=='L-BFGS-B':
+                
+                lb = np.ones(len(params)) * (-1000)
+                ub = np.zeros(len(params))
+                
+                lb[0] = -1000 
+                lb[1] = -1000
+                ub[0:2] = 0
+                
+                lb[-1] = -100
+                ub[-1] = 0
+                
+                lb[-2] = 0
+                ub[-2] = 3.5
+                
+                for i in range(2 + self.p + self.q, 2 + self.p + self.q + self.lags):
+                    
+                    lb[i] = -np.inf
+                    ub[i] = np.inf
+                    
+                bounds = Bounds(lb, ub)
+                
+                res = minimize(self.objfun, params, args=(yt, parametrization, regularization), 
+                                method='BFGS', jac='2-points',
+                                options={'disp':False})
+                
         else:
             
-            lb = np.zeros(4 + self.p + self.q + self.lags)
-            ub = np.ones(4 + self.p + self.q + self.lags)
+            lb = np.zeros(len(params))
+            ub = np.ones(len(params))
             
-            lb[0:2] = -np.inf
+            lb[0] = -np.inf 
+            lb[1] = 0 
             ub[0:2] = np.inf
             
-            lb[-1] = 2
-            ub[-1] = np.inf
+            lb[-1] = 1e-5
+            ub[-1] = 1
             
-            lb[-2] = 0
-            ub[-2] = np.inf
+            lb[-2] = 2
+            ub[-2] = 30
             
             for i in range(2 + self.p + self.q, 2 + self.p + self.q + self.lags):
                 
@@ -735,11 +815,13 @@ class beta_tGARCH:
             omega = np.exp(res.x[1])
             alphas = np.exp(res.x[2 : 2 + self.p])
             phis = np.exp(res.x[2 + self.p : 2 + self.p + self.q])
+            DoF = np.exp(res.x[2 + self.p + self.q])
         else:
             mu = res.x[0]
             omega = res.x[1]
             alphas = res.x[2 : 2 + self.p]
             phis = res.x[2 + self.p : 2 + self.p + self.q]
+            DoF = res.x[2 + self.p + self.q]
         
         if self.lags>=1:
             betas = res.x[2 + self.p + self.q : 2 + self.p + self.q + self.lags]
@@ -772,25 +854,37 @@ class beta_tGARCH:
         
         df_params_result = pd.DataFrame(data=params_result, index=index)
         
-        jac = res.jac[:-1]
-        jac = np.reshape(jac, (1, len(jac)))
-        jac[0,1 + self.lags : 1 + self.lags + self.p + self.q] = jac[0,1 + self.lags : 1 + self.lags + self.p + self.q]/np.exp(params_result[1 + self.lags : 1 + self.lags + self.p + self.q])
+        if method=='BFGS' or method=='L-BFGS-B':
+            
+            jac = res.jac[:-1]
+            jac = np.reshape(jac, (1, len(jac)))
+            jac[0,1 + self.lags : 1 + self.lags + self.p + self.q] = jac[0,1 + self.lags : 1 + self.lags + self.p + self.q]/np.exp(params_result[1 + self.lags : 1 + self.lags + self.p + self.q])
         
+        elif method=='nelder-mead':
+            jac = np.nan
+            
         loglike = -res.fun
-        hessian_matrix = jac.T @ jac
         
-        H = self.hessian(res.x, yt, .000001)[:-1,:-1]
+        if method=='BFGS' or method=='L-BFGS-B':
+            hessian_matrix = jac.T @ jac
+            
+            H = self.hessian(res.x, yt, DoF, .000001)[:-1,:-1]
+            
+            H1 = np.empty(np.shape(H))
+            
+            for i in range(0, len(H1)):
+                for j in range(0, len(H1)):
+                    if i==j:
+                        H1[i,j] = (H[i,i] - params_result[i] * jac[0,i])/(params_result[i]**2)
+                    else:
+                        H1[i,j] = H[i,j]/(params_result[i]*params_result[j])
+            try:
+                H2 = np.linalg.inv(H) @ hessian_matrix @ np.linalg.inv(H)
+            except:
+                H2 = np.nan
         
-        H1 = np.empty(np.shape(H))
-        
-        for i in range(0, len(H1)):
-            for j in range(0, len(H1)):
-                if i==j:
-                    H1[i,j] = (H[i,i] - params_result[i] * jac[0,i])/(params_result[i]**2)
-                else:
-                    H1[i,j] = H[i,j]/(params_result[i]*params_result[j])
-                    
-        H2 = np.linalg.inv(H) @ hessian_matrix @ np.linalg.inv(H)
+        else:
+            H2 = np.nan
         
         sigma_t_imp, eps = self.get_vol(yt.flatten(), mu, betas, omega, alphas, 
                                         phis, DoF, sigma_square0)
@@ -807,6 +901,7 @@ class beta_tGARCH:
                                   resid=eps)
             
         return result
+    
     
     
 

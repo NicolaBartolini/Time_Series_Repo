@@ -35,18 +35,24 @@ if __name__=='__main__':
     # Step 1: Download data from yahoo finance API 
     
     # List of major stock index tickers
+    # indexes = {
+    #     "S&P 500 (US)": "^GSPC",
+    #     "Dow Jones (US)": "^DJI",
+    #     "Nasdaq (US)": "^IXIC",
+    #     "Russell 2000 (US)": "^RUT",
+    #     "FTSE 100 (UK)": "^FTSE",
+    #     "DAX (Germany)": "^GDAXI",
+    #     "CAC 40 (France)": "^FCHI",
+    #     "Euro Stoxx 50 (Europe)": "^STOXX50E",
+    #     "IBEX 35 (Spain)": "^IBEX",
+    #     "FTSE MIB (Italy)": "FTSEMIB.MI",
+    #     "AEX (Netherlands)": "^AEX"
+    # }
+    
     indexes = {
         "S&P 500 (US)": "^GSPC",
         "Dow Jones (US)": "^DJI",
         "Nasdaq (US)": "^IXIC",
-        "Russell 2000 (US)": "^RUT",
-        "FTSE 100 (UK)": "^FTSE",
-        "DAX (Germany)": "^GDAXI",
-        "CAC 40 (France)": "^FCHI",
-        "Euro Stoxx 50 (Europe)": "^STOXX50E",
-        "IBEX 35 (Spain)": "^IBEX",
-        "FTSE MIB (Italy)": "FTSEMIB.MI",
-        "AEX (Netherlands)": "^AEX"
     }
     
     # Define the date range

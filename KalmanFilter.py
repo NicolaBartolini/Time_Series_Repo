@@ -318,7 +318,11 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
                 S = S + x @ x.T + V_smooth[:,:,t];
                 S10 = S10 + x1 @ x1.T + Vt_smooth[:,:,t];
                 
+<<<<<<< HEAD
                 auxY = np.copy(y1);
+=======
+                auxY = copy(y1);
+>>>>>>> ca0c4e0 (modifying beta-tGARCH module)
                 
                 auxC = np.zeros(np.shape(C));
                 auxC[no_nan_index] = copy(C[no_nan_index]);
@@ -661,7 +665,11 @@ def VAR1_em_fit(A0, H0, Q0, yt, maxiter=200, tol=10**-6):
             x0 = np.reshape(x_smooth[t], (n_var, 1))
             x1 = np.reshape(x_smooth[t-1], (n_var, 1))
             
+<<<<<<< HEAD
             y = np.reshape(copy(yt[t]), (n_var, 1))
+=======
+            y = np.reshape(np.copy(yt[t]), (n_var, 1))
+>>>>>>> ca0c4e0 (modifying beta-tGARCH module)
             
             S += x0 @ x0.T + V_smooth[t]
             S10 += x0 @ x1.T + Vt_smooth[t]
