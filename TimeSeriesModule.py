@@ -629,13 +629,6 @@ class beta_tGARCH:
             phis = np.exp(params[2 + self.p : 2 + self.p + self.q])
             DoF = np.exp(params[2 + self.p + self.q])
             
-        # if parametrization==1:
-            
-        #     mu = params[0]
-        #     omega = arctan_kernel(params[1])
-        #     alphas = arctan_kernel(params[2 : 2 + self.p])
-        #     phis = arctan_kernel(params[2 + self.p : 2 + self.p + self.q])
-            
         else:
             mu = params[0]
             omega = params[1]
