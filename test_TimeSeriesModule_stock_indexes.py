@@ -50,9 +50,9 @@ if __name__=='__main__':
     # }
     
     indexes = {
-        "S&P 500 (US)": "^GSPC",
-        "Dow Jones (US)": "^DJI",
-        "Nasdaq (US)": "^IXIC",
+        "S&P 500 (US)": "GSPC",
+        "Dow Jones (US)": "DJI",
+        "Nasdaq (US)": "IXIC",
     }
     
     # Define the date range
@@ -67,7 +67,7 @@ if __name__=='__main__':
         print(f"Processing {name} ({ticker})...")
         data = yf.download(ticker, start=start_date, end=end_date, interval="1d")
         if not data.empty:
-            combined_data[name] = data["Adj Close"]
+            combined_data[name] = data["Close"]
         else:
             print(f"Warning: No data found for {name} ({ticker}). Skipping.")
     
@@ -125,27 +125,8 @@ if __name__=='__main__':
         
         tstudent_pdf = scipy.stats.t.pdf(x_gauss, DoF, loc=0, scale=1)
         
-        # # Beta_tGARCH(1,1)
-        
-        # params_beta_tgarch11 = np.array([0, .0001, 0.1, 0.1, 4, .0001]) 
-        # # params_beta_tgarch11[1:] = np.log(params_beta_tgarch11[1:])
-        
-        # res_beta_tgarch11 = beta_tgarch11_model.fit(params_beta_tgarch11, yt, 1, 1)
-        
-        # fit_beta_tgarch_results[stock_index] = res_beta_tgarch11
-        
-        # # Beta_tEGARCH(1,1)
-        
-        # params_beta_tegarch11 = np.array([0, .00001, 0.01, 0.01, 5, .000001]) 
-                
-        # res_beta_tegarch11 = beta_tegarch11_model.fit(params_beta_tgarch11, yt)
-        
-        # fit_beta_tegarch_results[stock_index] = res_beta_tegarch11
-        
-        # Plots
         
         plt.hist(res_garch11.resid, density=True, bins=100, label='GARCH Residuals')
-        # plt.hist(res_beta_tgarch11.resid, density=True, bins=100, label='BetaTGARCH Residuals')
         plt.plot(x_gauss, gauss_pdf, color='r', label='std Gauss')
         plt.grid()
         plt.legend()
@@ -153,7 +134,6 @@ if __name__=='__main__':
         plt.show()
         
         plt.hist(res_tgarch11.resid, density=True, bins=100, label='tGARCH Residuals')
-        # plt.hist(res_beta_tgarch11.resid, density=True, bins=100, label='BetaTGARCH Residuals')
         plt.plot(x_gauss, tstudent_pdf, color='r', label='std t-Student')
         plt.grid()
         plt.legend()
@@ -171,8 +151,6 @@ if __name__=='__main__':
         # Bottom-left plot
         axes[1].plot(trading_dates, np.sqrt(res_garch11.hist_vol), label='garch vol', color='red')
         axes[1].plot(trading_dates, np.sqrt(res_tgarch11.hist_vol), label='tgarch vol', color='green')
-        # axes[1].plot(trading_dates, np.sqrt(res_beta_tgarch11.hist_vol), label='beta-tgarch vol', color='green')
-        # axes[1].plot(trading_dates, np.sqrt(res_beta_tegarch11.hist_vol), label='beta-tegarch vol', color='black')
         axes[1].set_title(" ")
         axes[1].legend()
         axes[1].grid()
@@ -184,8 +162,6 @@ if __name__=='__main__':
         stock_end_time = time()
         
         print(stock_index + ' enlapsed time : ' + str(stock_end_time - stock_start_time))
-        
-        # break
     
     global_end_time = time()
     print()
