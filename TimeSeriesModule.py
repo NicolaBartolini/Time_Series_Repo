@@ -123,7 +123,8 @@ class GARCH:
                 eps[i] = norminvgauss.rvs(a, b, size=(1,N))
                 
             
-            sigma_square[i] = omega + np.sum(alphas*eps[i-self.p:i]**2, axis=0) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
+            # sigma_square[i] = omega + np.sum(alphas*eps[i-self.p:i]**2, axis=0) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
+            sigma_square[i] = omega + np.sum(alphas*yt[i-self.p:i]**2, axis=0) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
             
             if self.lags==0:
                 yt[i,:] = mu + np.sqrt(sigma_square[i]) * eps[i]
@@ -174,7 +175,8 @@ class GARCH:
         
         for i in range(m, len(yt)):
             
-            sigma_square[i] = omega + np.sum(alphas*eps[i-self.p:i]**2) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
+            # sigma_square[i] = omega + np.sum(alphas*eps[i-self.p:i]**2) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
+            sigma_square[i] = omega + np.sum(alphas*yt[i-self.p:i]**2) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
             
             if self.lags==0:
                 eps[i] = (yt[i] - mu) / np.sqrt(sigma_square[i])
@@ -233,7 +235,8 @@ class GARCH:
             
             # if self.density=='normal':
                 
-            sigma_square[i] = omega + np.sum(alphas*eps[i-self.p:i]**2) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
+            # sigma_square[i] = omega + np.sum(alphas*eps[i-self.p:i]**2) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
+            sigma_square[i] = omega + np.sum(alphas*yt[i-self.p:i]**2) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
             
             if sigma_square[i]<10**(-6):
                 sigma_square[i] = np.min(sigma_square[:i])
