@@ -35,7 +35,7 @@ axs[1].plot(st[1:]**.5, 'r')
 
 plt.show()
 
-params = np.array([0, 0.002, 0, 0, 0.002]) 
+params = np.array([0, 0.002, 0, 0, 0.002]) * 2.5
 
 res = model.fit(params, yt[1:].flatten())
 
