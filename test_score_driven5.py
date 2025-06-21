@@ -31,8 +31,8 @@ rt = np.log(ftse[1:]/ftse[:-1])
 
 model2 = beta_tGARCH()
 
-# params = np.array([0, .0001, np.exp(-3), np.exp(-3), np.exp(1.4), np.exp(-3)])
-params = np.array([-1.28405804e-03,  6.31961385e-06,  1.92877437e-01, 5e-01,  4, np.exp(-3)])
+params = np.array([0, .0001, np.exp(-3), np.exp(-3), np.exp(1.4), np.exp(-3)])
+# params = np.array([-1.28405804e-03,  6.31961385e-06,  1.92877437e-01, 5e-01,  4, np.exp(-3)])
 print(np.round(params, 4))
 params[1:] = np.log(params[1:])    
 
