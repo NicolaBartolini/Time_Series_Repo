@@ -31,12 +31,13 @@ def inv_arctan_kernel(y):
 
 class GARCH:
     
-    def __init__(self, p=1, q=1, lags=0, malags=0, density='normal', **kwards):
+    def __init__(self, p=1, q=1, lags=0, malags=0, exog=0, density='normal', **kwards):
         
         default_inputs = {'p' : p,
                           'q' : q,
                           'lags' : lags,
                           'malags' : malags,
+                          'exog' : exog,
                           'density' : density}
         
         for key in kwards.keys():
@@ -50,6 +51,7 @@ class GARCH:
         self.q = default_inputs['q'] # lag order for the volatility
         self.lags = default_inputs['lags'] # Autoregressive order 
         self.malags = default_inputs['malags'] # lag MA order
+        self.exog = default_inputs['exog'] # numbers of exogenous variables
         self.density = default_inputs['density'] # density (normal or Student-t=tstudent)
         
         # self.p = p # lags for the noise in the volatility process
@@ -58,7 +60,7 @@ class GARCH:
         # self.Nexog = Nexog # number of exogenous variables
         # self.density = density
         
-    def simulate(self, y0, sigma_square0, n_steps, N=1, mu=0, betas=0, omega=0, alphas=0, phis=0, DF=4, a=np.nan, b=np.nan, **kwards):
+    def simulate(self, y0, sigma_square0, n_steps, N=1, mu=0, betas=0, omega=0, alphas=0, phis=0, DF=4, betaX=0, X=0,  **kwards):
         
         # mu = intercept of the time series yt
         # omega = intercept of the volatility process
@@ -74,9 +76,9 @@ class GARCH:
                           'omega' : omega,
                           'alphas' : alphas,
                           'phis' : phis,
-                          'DF':DF,
-                          'a':a,
-                          'b':b}
+                          'DF' : DF,
+                          'betaX': betaX,
+                          'X': X}
         
         for key in kwards.keys():
 
@@ -91,8 +93,8 @@ class GARCH:
         alphas = default_inputs['alphas']
         phis = default_inputs['phis']
         DF = default_inputs['DF']
-        a = default_inputs['a']
-        b = default_inputs['b']
+        betaX = default_inputs['betaX']
+        X = default_inputs['X']
                 
         m = max([self.lags, self.p, self.q])
         
@@ -117,10 +119,6 @@ class GARCH:
             elif self.density=='tstudent':
                 
                 eps[i] = np.random.standard_t(DF, (1,N))
-            
-            elif self.density=='norminvgauss':
-                
-                eps[i] = norminvgauss.rvs(a, b, size=(1,N))
                 
             
             # sigma_square[i] = omega + np.sum(alphas*eps[i-self.p:i]**2, axis=0) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
@@ -131,6 +129,9 @@ class GARCH:
             
             sigma_square[i] = omega + np.sum(alphas*z**2, axis=0) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
             
+            if self.exog > 0:
+                sigma_square[i] += np.sum(betaX * X[i]) # add the impact of the exogenous variables to the vol process
+            
             if self.lags==0:
                 yt[i,:] = mu + np.sqrt(sigma_square[i]) * eps[i]
             else:
@@ -138,7 +139,7 @@ class GARCH:
             
         return yt, sigma_square
     
-    def get_vol(self, yt, mu=0, betas=0, omega=0, alphas=0, phis=0,  **kwards):
+    def get_vol(self, yt, mu=0, betas=0, omega=0, alphas=0, phis=0, betaX=0, X=0, **kwards):
         
         # getting the volatility from the observed time series 
         
@@ -150,12 +151,14 @@ class GARCH:
         # phis = coefficients for the lagged volatilities in the vol process
         # df = degrees of freedom for the Student-t distribution
         # yt = observed time series
-        # xt = time series with the exogenous variables
+        # X = time series with the exogenous variables
         
         default_inputs = {'mu' : mu,
                           'betas' : betas,
                           'omega' : omega,
                           'alphas' : alphas,
+                          'betaX' : betaX,
+                          'X' : X,
                           'phis' : phis}
         
         for key in kwards.keys():
@@ -168,7 +171,9 @@ class GARCH:
         mu = default_inputs['mu']
         betas = default_inputs['betas']
         omega = default_inputs['omega']
-        alphas = default_inputs['alphas']        
+        alphas = default_inputs['alphas']
+        betaX = default_inputs['betaX'] # parameters for the exogenous variables in the vol process
+        X = default_inputs['X'] # numpy array containing the exogenous variables
         
         m = max([self.lags, self.p, self.q])
         
@@ -187,7 +192,11 @@ class GARCH:
             else:
                 z = yt[i-self.p:i] - mu - np.sum(betas*yt[i-self.lags:i],axis=0)
             
+            # if betaX==0:
             sigma_square[i] = omega + np.sum(alphas*z**2) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
+            
+            if self.exog > 0:
+                sigma_square[i] += np.sum(betaX * X[i]) # add the impact of the exogenous variables to the vol process
             
             if self.lags==0:
                 eps[i] = (yt[i] - mu) / np.sqrt(sigma_square[i])
@@ -195,9 +204,79 @@ class GARCH:
                 eps[i] = (yt[i] - mu - np.sum(betas*yt[i-self.lags:i])) / np.sqrt(sigma_square[i]) 
         
         return sigma_square, eps
-
     
-    def loglike(self, yt,  mu=0, betas=0, omega=0, alphas=0, phis=0, DF=4, sigma_square0=0.0001, **kwards):
+    def predict(self, y0, sigma_square0, mu=0, betas=0, omega=0, alphas=0, phis=0, betaX=0, X=0, steps=1, **kwards):
+        
+        # getting the volatility from the observed time series 
+        
+        # mu = intercept of the time series yt
+        # omega = intercept of the volatility process
+        # betas = coefficients for the autoregressive part in the mean process
+        # gammas = coefficients for the exogenous variables
+        # alphas = coefficients for the square noise in the vol process
+        # phis = coefficients for the lagged volatilities in the vol process
+        # df = degrees of freedom for the Student-t distribution
+        # yt = observed time series
+        # X = time series with the exogenous variables
+        
+        default_inputs = {'mu' : mu,
+                          'betas' : betas,
+                          'omega' : omega,
+                          'alphas' : alphas,
+                          'betaX' : betaX,
+                          'X' : X,
+                          'phis' : phis,
+                          'steps' : steps}
+        
+        for key in kwards.keys():
+
+            if key in default_inputs.keys():
+                default_inputs[key] = kwards[key]
+            else:
+                raise Exception(key, 'is not a correct input')
+        
+        mu = default_inputs['mu']
+        betas = default_inputs['betas']
+        omega = default_inputs['omega']
+        alphas = default_inputs['alphas']
+        betaX = default_inputs['betaX'] # parameters for the exogenous variables in the vol process
+        X = default_inputs['X'] # numpy array containing the exogenous variables
+        steps = default_inputs['steps'] # number of steps ahead 
+        
+        y_pred = np.empty(self.lags + steps) 
+        eps0 = 0 
+        
+        if self.lags>0:
+            
+            y_pred[:self.lags] = y0
+            eps0 = y0 - mu - np.sum(betas * y_pred[:self.lags])
+            
+            for i in range(self.lags, self.lags + steps):
+                y_pred[i] = mu + np.sum(betas*y_pred[i-self.lags : i]) 
+        else:
+            y_pred[:] = mu 
+            eps0 = y0 - mu 
+            
+        m = max([self.p, self.q])
+        sigma_square_pred = np.empty(m + steps) 
+        sigma_square_pred[:m] = sigma_square0 
+        
+        flag = True
+        
+        for i in range(m, m+steps):
+            
+            if flag:
+                sigma_square_pred[i] = omega + np.sum(alphas*eps0**2) + np.sum(phis*sigma_square_pred[i-self.q:i], axis=0)
+                flag = False 
+            else:
+                sigma_square_pred[i] = omega + np.sum(phis*sigma_square_pred[i-self.q:i], axis=0)
+            
+            if self.exog > 0:
+                sigma_square_pred[i] += np.sum(betaX * X[i]) # add the impact of the exogenous variables to the vol process
+        
+        return y_pred[self.lags:], sigma_square_pred[self.q]
+    
+    def loglike(self, yt,  mu=0, betas=0, omega=0, alphas=0, phis=0, DF=4, sigma_square0=0.0001, betaX=0, X=0, **kwards):
         
         # mu = intercept of the time series yt
         # omega = intercept of the volatility process
@@ -215,7 +294,9 @@ class GARCH:
                           'alphas' : alphas,
                           'phis' : phis,
                           'DF' : DF,
-                          'sigma_square0' : sigma_square0}
+                          'sigma_square0' : sigma_square0,
+                          'betaX' : betaX,
+                          'X' : X}
         
         for key in kwards.keys():
 
@@ -230,6 +311,8 @@ class GARCH:
         alphas = default_inputs['alphas']
         DF = default_inputs['DF']
         sigma_square0 = default_inputs['sigma_square0']
+        betaX = default_inputs['betaX']
+        X = default_inputs['X']
         
         result = 0;
         
@@ -252,7 +335,13 @@ class GARCH:
             else:
                 z = yt[i-self.p:i] - mu - np.sum(betas*yt[i-self.lags:i],axis=0)
                 
-            sigma_square[i] = omega + np.sum(alphas*z**2) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
+            
+            if self.exog==0:
+                sigma_square[i] = omega + np.sum(alphas*z**2) + np.sum(phis*sigma_square[i-self.q:i], axis=0)
+            else:
+                # print(X)
+                sigma_square[i] = omega + np.sum(alphas*z**2) + np.sum(phis*sigma_square[i-self.q:i], axis=0) + np.sum(betaX * X[i]) # add the impact of the exogenous variables to the vol process
+            
             
             if sigma_square[i]<10**(-6):
                 sigma_square[i] = np.min(sigma_square[:i])
@@ -277,7 +366,7 @@ class GARCH:
         
         return result;
     
-    def gradient(self, yt,  mu=0, betas=0, omega=0, alphas=0, phis=0, DF=4, sigma_square0=0.0001, dx=.00001, **kwards):
+    def gradient(self, yt,  mu=0, betas=0, omega=0, alphas=0, phis=0, DF=4, sigma_square0=0.0001, betaX=0, X=0, dx=.00001, **kwards):
         
         default_inputs = {'mu' : mu,
                           'betas' : betas,
@@ -286,7 +375,9 @@ class GARCH:
                           'phis' : phis,
                           'DF' : DF,
                           'sigma_square0' : sigma_square0,
-                          'dx' : dx}
+                          'dx' : dx,
+                          'betaX' : betaX,
+                          'X': X}
         
         for key in kwards.keys():
 
@@ -302,11 +393,13 @@ class GARCH:
         DF = default_inputs['DF']
         sigma_square0 = default_inputs['sigma_square0']
         dx = default_inputs['dx']
+        betaX = default_inputs['betaX']
+        X = default_inputs['X']
         
         result = np.empty((1, 2 + self.p + self.q + self.lags))
         
-        f = -self.loglike(yt, mu, betas, omega, alphas, phis, DF, sigma_square0)
-        df = -self.loglike(yt, mu + dx, betas, omega, alphas, phis, DF, sigma_square0)
+        f = -self.loglike(yt, mu, betas, omega, alphas, phis, DF, sigma_square0, betaX, X)
+        df = -self.loglike(yt, mu + dx, betas, omega, alphas, phis, DF, sigma_square0, betaX, X)
         
         result[0] = (df-f)/dx
         
@@ -317,15 +410,15 @@ class GARCH:
             betas2 = copy(betas)
             betas2[j] += dx
             
-            f = -self.loglike(yt, mu, betas, omega, alphas, phis, DF, sigma_square0)
-            df = -self.loglike(yt, mu, betas2, omega, alphas, phis, DF, sigma_square0)
+            f = -self.loglike(yt, mu, betas, omega, alphas, phis, DF, sigma_square0, betaX, X)
+            df = -self.loglike(yt, mu, betas2, omega, alphas, phis, DF, sigma_square0, betaX, X)
             
             result[0,i] = (df-f)/dx
             
             i += 1
         
-        f = -self.loglike(yt, mu, betas, omega, alphas, phis, DF, sigma_square0)
-        df = -self.loglike(yt, mu, betas, omega + dx, alphas, phis, DF, sigma_square0)
+        f = -self.loglike(yt, mu, betas, omega, alphas, phis, DF, sigma_square0, betaX, X)
+        df = -self.loglike(yt, mu, betas, omega + dx, alphas, phis, DF, sigma_square0, betaX, X)
         
         result[0,i] = (df-f)/dx
         i+=1 
@@ -335,8 +428,8 @@ class GARCH:
             alphas2 = copy(alphas)
             alphas2[j] += dx
             
-            f = -self.loglike(yt, mu, betas, omega, alphas, phis, DF, sigma_square0)
-            df = -self.loglike(yt, mu, betas, omega, alphas2, phis, DF, sigma_square0)
+            f = -self.loglike(yt, mu, betas, omega, alphas, phis, DF, sigma_square0, betaX, X)
+            df = -self.loglike(yt, mu, betas, omega, alphas2, phis, DF, sigma_square0, betaX, X)
             
             result[0,i] = (df-f)/dx
             
@@ -347,8 +440,8 @@ class GARCH:
             phis2 = copy(phis)
             phis2[j] += dx
             
-            f = -self.loglike(yt, mu, betas, omega, alphas, phis, DF, sigma_square0)
-            df = -self.loglike(yt, mu, betas, omega, alphas, phis2, DF, sigma_square0)
+            f = -self.loglike(yt, mu, betas, omega, alphas, phis, DF, sigma_square0, betaX, X)
+            df = -self.loglike(yt, mu, betas, omega, alphas, phis2, DF, sigma_square0, betaX, X)
             
             result[0,i] = (df-f)/dx
             
@@ -356,13 +449,13 @@ class GARCH:
         
         return result
        
-    def hessian(self, yt,  mu=0, betas=0, omega=0, alphas=0, phis=0, DF=4, sigma_square0=0.0001, dx=.0001, **kwards):
+    def hessian(self, yt,  mu=0, betas=0, omega=0, alphas=0, phis=0, DF=4, sigma_square0=0.0001, betaX=0, X=0, dx=.0001, **kwards):
         
-        grad = self.gradient(yt,  mu, betas, omega, alphas, phis, DF, sigma_square0, dx)
+        grad = self.gradient(yt,  mu, betas, omega, alphas, phis, DF, sigma_square0, dx, betaX, X)
         
         return grad.T @ grad;
     
-    def objfun(self, params, yt):
+    def objfun(self, params, yt, X=0):
         
         mu = params[0]
         omega = np.exp(params[1])
@@ -374,21 +467,27 @@ class GARCH:
         else:
             betas = None
         
+        if self.exog>0:
+            betaX = np.exp(params[2 + self.p + self.q + self.lags : 2 + self.p + self.q + self.lags + self.exog])
+            # print(betaX)
+        else:
+            betaX=0
+        
         if self.density=='normal':
             
             sigma_square0 = np.exp(params[-1])
-            return -self.loglike(yt, mu, betas, omega, alphas, phis, 4, sigma_square0)
+            return -self.loglike(yt, mu, betas, omega, alphas, phis, 4, sigma_square0, betaX=betaX, X=X)
         
         elif self.density=='tstudent':
             
             DoF = np.exp(params[-2])
             sigma_square0 = np.exp(params[-1])
-            return -self.loglike(yt, mu, betas, omega, alphas, phis, DoF, sigma_square0)
+            return -self.loglike(yt, mu, betas, omega, alphas, phis, DoF, sigma_square0, betaX=betaX, X=X)
             
     
-    def fit(self, params, yt, method='BFGS'):
+    def fit(self, params, yt, X=0, method='BFGS'):
         
-        res = minimize(self.objfun, params, args=yt, 
+        res = minimize(self.objfun, params, args=(yt, X), 
                         method='BFGS', jac='2-points',
                         options={'disp':False})
         
@@ -405,6 +504,9 @@ class GARCH:
         for i in range(0, self.q):
             index.append('phi_'+str(i+1))  
         
+        for i in range(0, self.exog):
+            index.append('betaX_'+str(i+1))
+        
         if self.density=='tstudent':
             index.append('DoF')
         
@@ -417,6 +519,11 @@ class GARCH:
             betas = res.x[2 + self.p + self.q : 2 + self.p + self.q + self.lags]
         else:
             betas = None
+            
+        if self.exog>0:
+            betaX = np.exp(res.x[2 + self.p + self.q + self.lags : 2 + self.p + self.q + self.lags + self.exog])
+        else:
+            betaX = 0 
         
         if self.density=='normal':
             sigma_square0 = np.exp(res.x[-1])
@@ -437,6 +544,9 @@ class GARCH:
         
         if self.q>0:
             params_result = np.hstack((params_result, phis))
+            
+        if self.exog>0:
+            params_result = np.hstack((params_result, betaX))
         
         if self.density=='tstudent':
             params_result = np.hstack((params_result, np.array([DoF])))
@@ -446,7 +556,7 @@ class GARCH:
         
         jac = res.jac[:-1]
         jac = np.reshape(jac, (1, len(jac)))
-        jac[0,1 + self.lags : 1 + self.lags + self.p + self.q] = jac[0,1 + self.lags : 1 + self.lags + self.p + self.q]/np.exp(params_result[1 + self.lags : 1 + self.lags + self.p + self.q])
+        jac[0, 1 + self.lags : 1 + self.lags + self.p + self.q + self.exog] = jac[0, 1 + self.lags : 1 + self.lags + self.p + self.q + self.exog]/np.exp(params_result[1 + self.lags : 1 + self.lags + self.p + self.q + self.exog])
         
         loglike = -res.fun
         hessian_matrix = jac.T @ jac
@@ -457,8 +567,11 @@ class GARCH:
         
         p_values = scipy.stats.t.sf(t_statistics, len(yt)-len(params_std)-1)
         
+        # print('ECCOMI')
+        # print()
+        
         sigma_t_imp, eps = self.get_vol(yt.flatten(), mu=mu, omega=omega, 
-                                         alphas=alphas, phis=phis, betas=betas)
+                                         alphas=alphas, phis=phis, betas=betas, betaX=betaX, X=X)
         
         df_params_pvalues = pd.DataFrame(data=p_values, index=index)
         
@@ -469,6 +582,8 @@ class GARCH:
                               resid=eps)
         
         return result
+
+
     
 
 class TGARCH:
