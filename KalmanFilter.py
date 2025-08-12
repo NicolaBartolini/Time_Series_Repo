@@ -406,7 +406,6 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
     
     return F, R, Q, att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, vt, Ft, loglike;
 
-
 def LeadLagObjFun(params, yt):
     
     n_var = len(yt[0])
