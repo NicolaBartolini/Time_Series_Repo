@@ -318,11 +318,8 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
                 S = S + x @ x.T + V_smooth[:,:,t];
                 S10 = S10 + x1 @ x1.T + Vt_smooth[:,:,t];
                 
-<<<<<<< HEAD
                 auxY = np.copy(y1);
-=======
                 auxY = copy(y1);
->>>>>>> ca0c4e0 (modifying beta-tGARCH module)
                 
                 auxC = np.zeros(np.shape(C));
                 auxC[no_nan_index] = copy(C[no_nan_index]);
@@ -409,6 +406,75 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
     
     return F, R, Q, att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, vt, Ft, loglike;
 
+
+def LeadLagObjFun(params, yt):
+    
+    n_var = len(yt[0])
+    # n_corr = int(factorial(n_var)/(2*factorial(n_var-2)))
+    
+    leadlag_par = params[:n_var*n_var]
+    H_sigmas = np.exp(params[n_var*n_var : n_var*n_var + n_var])
+    Q_sigmas = np.exp(params[n_var*n_var + n_var : n_var*n_var + n_var*2])
+    Q_rhos = sigmoid_like_fun(params[n_var*n_var + n_var*2 : ])
+    
+    ####### The lead lag matrix
+    
+    F = np.empty((n_var, n_var))
+    
+    for i in range(0, n_var):
+        for j in range(0, n_var):
+            F[i,j] = leadlag_par[i*j + i] 
+    
+    Tsu = np.hstack((np.eye(n_var) + F, -F));
+    Tgiu = np.hstack((np.eye(n_var), np.zeros((n_var, n_var))));
+    T_t = np.vstack((Tsu, Tgiu)); # Final lead-lag matrix (Phi in the paper/thesis)
+    
+    # H_params = np.hstack((H_sigmas, H_rhos))
+    Q_params = np.hstack((Q_sigmas, Q_rhos))
+    
+    H = np.diag(H_sigmas)
+    Q = matrix_generator(Q_params.flatten(), n_var)
+    
+    Q_t = np.hstack((Q, np.zeros(np.shape(Q))));
+    Q_t = np.vstack((Q_t, np.zeros((len(Q_t),len(Q_t[0]*2)))));
+    
+    Z_t = np.hstack((np.eye(n_var), np.zeros((n_var, n_var))))
+    # print(H)
+    
+    att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, vt, Ft, loglike = LeadLagKF(yt, Z_t, T_t, H, Q_t, burnIn=10)
+    
+    return -loglike
+
+def LeadLagMLfit(params, yt, n_var):
+    
+    res = minimize(LeadLagObjFun, params, args=(yt), method='BFGS')
+    
+    fitted_params = res.x 
+    
+    leadlag_par = fitted_params[:n_var*n_var]
+    H_sigmas = np.exp(fitted_params[n_var*n_var : n_var*n_var + n_var])
+    Q_sigmas = np.exp(fitted_params[n_var*n_var + n_var : n_var*n_var + n_var*2])
+    Q_rhos = sigmoid_like_fun(fitted_params[n_var*n_var + n_var*2 : ])
+    
+    ####### The lead lag matrix
+    
+    F = np.empty((n_var, n_var))
+    
+    for i in range(0, n_var):
+        for j in range(0, n_var):
+            F[i,j] = leadlag_par[i*j + i] 
+    
+    Tsu = np.hstack((np.eye(n_var) + F, -F));
+    Tgiu = np.hstack((np.eye(n_var), np.zeros((n_var, n_var))));
+    T_t = np.vstack((Tsu, Tgiu)); # Final lead-lag matrix (Phi in the paper/thesis)
+    
+    # H_params = np.hstack((H_sigmas, H_rhos))
+    Q_params = np.hstack((Q_sigmas, Q_rhos))
+    
+    H = np.diag(H_sigmas)
+    Q = matrix_generator(Q_params.flatten(), n_var)
+    
+    return F, H, Q, T_t
 
 def VAR1_kalman_filter(yt, A, Z, H, Q):
     
@@ -665,11 +731,9 @@ def VAR1_em_fit(A0, H0, Q0, yt, maxiter=200, tol=10**-6):
             x0 = np.reshape(x_smooth[t], (n_var, 1))
             x1 = np.reshape(x_smooth[t-1], (n_var, 1))
             
-<<<<<<< HEAD
             y = np.reshape(copy(yt[t]), (n_var, 1))
-=======
+
             y = np.reshape(np.copy(yt[t]), (n_var, 1))
->>>>>>> ca0c4e0 (modifying beta-tGARCH module)
             
             S += x0 @ x0.T + V_smooth[t]
             S10 += x0 @ x1.T + Vt_smooth[t]
