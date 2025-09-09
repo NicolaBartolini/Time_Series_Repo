@@ -724,7 +724,7 @@ def VAR1_em_fit(A0, H0, Q0, yt, maxiter=200, tol=10**-6):
     
     for i in range(1, maxiter+1):
         
-        att, Ptt, at, Pt, vt, Ft, Kt, logliket = VAR1_kalman_filter(yt, A, Z, H, Q)
+        att, Ptt, at, Pt, vt, Ft, Kt, loglike = VAR1_kalman_filter(yt, A, Z, H, Q)
         x_smooth, V_smooth, Vt_smooth = VAR1Smoothing(yt, A, Z, att, Ptt, Pt, vt, Ft, Kt)
         
         S = np.zeros((n_var, n_var))
@@ -774,13 +774,14 @@ def VAR1_em_fit(A0, H0, Q0, yt, maxiter=200, tol=10**-6):
         
         A = BB @ np.linalg.inv(AA)
         
-        if i==1:
-            l.append(loglike)
-            continue
+        # if i==1:
+        #     l.append(loglike)
+        #     continue
         
-        if abs(l[-1] - loglike)<=tol:
-            print('Iterations : '+str(i))
-            return att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, loglike, vt, Ft, A, H, Q
+        # if abs(l[-1] - loglike)<=tol:
+        #     print('Iterations : '+str(i))
+        #     return att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, loglike, vt, Ft, A, H, Q
     
     # print('Maximun number of iterations reached')
-    return att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, loglike, vt, Ft, A, H, Q 
+    
+    return att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, vt, Ft, A, H, Q 
