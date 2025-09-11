@@ -279,12 +279,6 @@ def LeadLagObjFun(params, yt):
     
     ####### The lead lag matrix
     
-    # F = np.empty((n_var, n_var))
-    
-    # for i in range(0, n_var):
-    #     for j in range(0, n_var):
-    #         F[i,j] = leadlag_par[i*n_var + j] 
-    
     F = np.reshape(leadlag_par, (n_var, n_var))
     
     Tsu = np.hstack((np.eye(n_var) + F, -F))
@@ -307,19 +301,72 @@ def LeadLagObjFun(params, yt):
     
     return -loglike
 
-def LeadLagMLfit(params, yt, n_var):
+def LeadLagObjFun2(params, yt):
+    # This functionis for fitting the restricted model without cross lead-lag effects
+    n_var = len(yt[0])
+    # n_corr = int(factorial(n_var)/(2*factorial(n_var-2)))
     
-    res = minimize(LeadLagObjFun, params, args=(yt), method='BFGS')
-    
-    fitted_params = res.x 
-    
-    leadlag_par = fitted_params[:n_var*n_var]
-    H_sigmas = np.exp(fitted_params[n_var*n_var : n_var*n_var + n_var])
-    Q_sigmas = np.exp(fitted_params[n_var*n_var + n_var : n_var*n_var + n_var*2])
-    Q_rhos = sigmoid_like_fun(fitted_params[n_var*n_var + n_var*2 : ])
+    leadlag_par = params[:n_var]
+    H_sigmas = np.exp(params[n_var : n_var + n_var])
+    Q_sigmas = np.exp(params[n_var + n_var : n_var*n_var + n_var*2])
+    Q_rhos = sigmoid_like_fun(params[n_var + n_var*2 : ])
     
     ####### The lead lag matrix
-    F = np.reshape(leadlag_par, (n_var, n_var))
+    
+    F = np.diag(leadlag_par)
+    
+    Tsu = np.hstack((np.eye(n_var) + F, -F))
+    Tgiu = np.hstack((np.eye(n_var), np.zeros((n_var, n_var))))
+    T_t = np.vstack((Tsu, Tgiu)) # Final lead-lag matrix (Phi in the paper/thesis)
+    
+    # H_params = np.hstack((H_sigmas, H_rhos))
+    Q_params = np.hstack((Q_sigmas, Q_rhos))
+    
+    H = np.diag(H_sigmas)
+    Q = matrix_generator(Q_params.flatten(), n_var)
+    
+    Q_t = np.hstack((Q, np.zeros(np.shape(Q))))
+    Q_t = np.vstack((Q_t, np.zeros((len(Q_t),len(Q_t[0]*2)))))
+    
+    Z_t = np.hstack((np.eye(n_var), np.zeros((n_var, n_var))))
+    # print(H)
+    
+    att, Ptt, at, Pt, vt, Ft, Kt, loglike = LeadLagKF(yt, Z_t, T_t, H, Q_t, burnIn=10)
+    
+    return -loglike
+
+def LeadLagMLfit(params, yt, n_var, model=1):
+    
+    if model==1:
+        res = minimize(LeadLagObjFun, params, args=(yt), method='BFGS')
+        
+        fitted_params = res.x 
+        
+        leadlag_par = fitted_params[:n_var*n_var]
+        H_sigmas = np.exp(fitted_params[n_var*n_var : n_var*n_var + n_var])
+        Q_sigmas = np.exp(fitted_params[n_var*n_var + n_var : n_var*n_var + n_var*2])
+        Q_rhos = sigmoid_like_fun(fitted_params[n_var*n_var + n_var*2 : ])
+        
+        ####### The lead lag matrix
+        F = np.reshape(leadlag_par, (n_var, n_var))
+        
+    elif model==2:
+        
+        res = minimize(LeadLagObjFun2, params, args=(yt), method='BFGS')
+        
+        fitted_params = res.x 
+        
+        leadlag_par = fitted_params[:n_var]
+        H_sigmas = np.exp(fitted_params[n_var : n_var + n_var])
+        Q_sigmas = np.exp(fitted_params[n_var + n_var : n_var*n_var + n_var*2])
+        Q_rhos = sigmoid_like_fun(fitted_params[n_var + n_var*2 : ])
+        
+        ####### The lead lag matrix
+        F = np.diag(leadlag_par)
+        # print(np.shape(F))
+    
+    else:
+        raise ValueError('model==1 or model==2')
     
     Tsu = np.hstack((np.eye(n_var) + F, -F))
     Tgiu = np.hstack((np.eye(n_var), np.zeros((n_var, n_var))))
@@ -391,8 +438,8 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
                 x1 = x_smooth[t-1,:]
                 x1 = np.reshape(x1, (len(x1),1))
                 
-                S = S + x @ x.T + V_smooth[:,:,t]
-                S10 = S10 + x1 @ x1.T + Vt_smooth[:,:,t]
+                S = S + x @ x.T + V_smooth[t]
+                S10 = S10 + x1 @ x1.T + Vt_smooth[t]
                 
                 auxY = np.copy(y1)
                 auxY = copy(y1)
@@ -403,7 +450,7 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
                 R2 = copy(R)
                 R2[no_nan_index] = 0
                 
-                eps_smooth += (auxY - auxC@x) @ (auxY - auxC@x).T + auxC@V_smooth[:,:,t]@auxC.T + R2
+                eps_smooth += (auxY - auxC@x) @ (auxY - auxC@x).T + auxC@V_smooth[t]@auxC.T + R2
                 
             else:
                 
@@ -682,29 +729,79 @@ def VAR1_obj_fun(params, yt):
     
     return -loglike 
 
-def VAR1_ml_fit(params, yt):
+def VAR1_obj_fun2(params, yt):
     
     n_var = len(yt[0])
     n_corr = int(factorial(n_var)/(2*factorial(n_var-2)))
     
-    res = minimize(VAR1_obj_fun, params, args=(yt), method='BFGS')
+    autoreg_par = params[:n_var]
+    H_sigmas = np.exp(params[n_var : n_var + n_var])
+    Q_sigmas = np.exp(params[n_var + n_var : n_var + n_var*2])
+    H_rhos = sigmoid_like_fun(params[n_var + n_var*2 : n_var + n_var*2 + n_corr])
+    Q_rhos = sigmoid_like_fun(params[n_var + n_var*2 + n_corr :])
     
-    fitted_par = res.x 
-    
-    autoreg_par = fitted_par[:n_var*n_var]
-    A = np.reshape(autoreg_par, (n_var, n_var))
-    
-    H_sigmas = np.exp(fitted_par[n_var*n_var : n_var*n_var + n_var])
-    Q_sigmas = np.exp(fitted_par[n_var*n_var + n_var : n_var*n_var + n_var*2])
-    
-    H_rhos = sigmoid_like_fun(fitted_par[n_var*n_var + n_var*2 : n_var*n_var + n_var*2 + n_corr])
-    Q_rhos = sigmoid_like_fun(fitted_par[n_var*n_var + n_var*2 + n_corr :])
+    # A = np.reshape(autoreg_par, (n_var, n_var)) 
+    A = np.diag(autoreg_par)
     
     H_params = np.hstack((H_sigmas, H_rhos))
     Q_params = np.hstack((Q_sigmas, Q_rhos))
-
+    
     H = matrix_generator(H_params.flatten(), n_var)
     Q = matrix_generator(Q_params.flatten(), n_var)
+    
+    Z = np.eye(n_var)
+    
+    att, Ptt, at, Pt, vt, Ft, Kt, loglike = VAR1_kalman_filter(yt, A, Z, H, Q)
+    
+    return -loglike 
+
+def VAR1_ml_fit(params, yt, model=1):
+    
+    n_var = len(yt[0])
+    n_corr = int(factorial(n_var)/(2*factorial(n_var-2)))
+    
+    if model==1:
+        res = minimize(VAR1_obj_fun, params, args=(yt), method='BFGS')
+        
+        fitted_par = res.x 
+        autoreg_par = fitted_par[:n_var*n_var]
+        A = np.reshape(autoreg_par, (n_var, n_var))
+        
+        H_sigmas = np.exp(fitted_par[n_var*n_var : n_var*n_var + n_var])
+        Q_sigmas = np.exp(fitted_par[n_var*n_var + n_var : n_var*n_var + n_var*2])
+        
+        H_rhos = sigmoid_like_fun(fitted_par[n_var*n_var + n_var*2 : n_var*n_var + n_var*2 + n_corr])
+        Q_rhos = sigmoid_like_fun(fitted_par[n_var*n_var + n_var*2 + n_corr :])
+        
+        H_params = np.hstack((H_sigmas, H_rhos))
+        Q_params = np.hstack((Q_sigmas, Q_rhos))
+
+        H = matrix_generator(H_params.flatten(), n_var)
+        Q = matrix_generator(Q_params.flatten(), n_var)
+    
+    elif model==2:
+        
+        res = minimize(VAR1_obj_fun2, params, args=(yt), method='BFGS')
+        
+        fitted_par = res.x 
+        autoreg_par = fitted_par[:n_var]
+        A = np.diag(autoreg_par)
+        
+        H_sigmas = np.exp(fitted_par[n_var : n_var + n_var])
+        Q_sigmas = np.exp(fitted_par[n_var + n_var : n_var + n_var*2])
+        
+        H_rhos = sigmoid_like_fun(fitted_par[n_var + n_var*2 : n_var + n_var*2 + n_corr])
+        Q_rhos = sigmoid_like_fun(fitted_par[n_var + n_var*2 + n_corr :])
+        
+        H_params = np.hstack((H_sigmas, H_rhos))
+        Q_params = np.hstack((Q_sigmas, Q_rhos))
+
+        H = matrix_generator(H_params.flatten(), n_var)
+        Q = matrix_generator(Q_params.flatten(), n_var)
+    
+    else:
+        raise ValueError('model==1 or model==2')
+    
     
     return A, H, Q
 
@@ -773,15 +870,6 @@ def VAR1_em_fit(A0, H0, Q0, yt, maxiter=200, tol=10**-6):
         Q = tempQ + diagQ
         
         A = BB @ np.linalg.inv(AA)
-        
-        # if i==1:
-        #     l.append(loglike)
-        #     continue
-        
-        # if abs(l[-1] - loglike)<=tol:
-        #     print('Iterations : '+str(i))
-        #     return att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, loglike, vt, Ft, A, H, Q
     
-    # print('Maximun number of iterations reached')
-    
-    return att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, vt, Ft, A, H, Q 
+    # return att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, vt, Ft, A, H, Q 
+    return att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, loglike, vt, Ft, Kt, A, H, Q
