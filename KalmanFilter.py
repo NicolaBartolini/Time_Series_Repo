@@ -547,14 +547,18 @@ def VAR1_kalman_filter(yt, A, Z, H, Q, burnIn = 0):
     
     
     # Ptt = [] # filtered estimator of the variance of the unobserved process
-    Ptt0 = Pt[0] - Pt[0] @ Z.T @ inv(Ft[0]) @ Z @ Pt[0]
+    # Ptt0 = Pt[0] - Pt[0] @ Z.T @ inv(Ft[0]) @ Z @ Pt[0]
+    ZP = Z @ Pt[0]
+    Ptt0 = Pt[0] - Pt[0] @ Z.T @ np.linalg.solve(Ft[0], ZP)
     n_rows, n_cols = np.shape(Ptt0)
     
     Ptt = np.empty((N, n_rows, n_cols))
     Ptt[0] = Ptt0
     
     # Kalman gain part
-    K0 = A @ Pt[0] @ Z.T @ inv(Ft[0]) # initial value of the Kalman gain
+    # K0 = A @ Pt[0] @ Z.T @ inv(Ft[0]) # initial value of the Kalman gain
+    tmp = A @ Pt[0] @ Z.T
+    K0 = np.linalg.solve(Ft[0].T, tmp.T).T
     n_rows, n_cols = np.shape(K0)
     
     Kt = np.empty((N, n_rows, n_cols))
@@ -579,7 +583,9 @@ def VAR1_kalman_filter(yt, A, Z, H, Q, burnIn = 0):
     vt[0] = vt0
     
     att = np.empty((N, n_var)) # filtered estimator of the unobserved process
-    att[0,:] = at[0] + Pt[0] @ Z @ inv(Ft[0]) @ vt[0] # computing the initial value of the filtered estimator of the unobserved process
+    # att[0,:] = at[0] + Pt[0] @ Z @ inv(Ft[0]) @ vt[0] # computing the initial value of the filtered estimator of the unobserved process
+    tmp = Pt[0] @ Z.T
+    att[0, :] = at[0] + tmp @ np.linalg.solve(Ft[0], vt[0])
     
     for i in np.arange(1, N):
         
@@ -641,16 +647,27 @@ def VAR1_kalman_filter(yt, A, Z, H, Q, burnIn = 0):
             
             Ft[i] = (Z @ Pt[i] @ Z.T + H) # computing the variance of the innovation error
           
-            F = inv(Ft[i])
+            # F = inv(Ft[i])
             
-            Ptt[i] = (Pt[i] - Pt[i] @ Z.T @ F @ Z @ Pt[i]) # computing the filtered variance
+            # Ptt[i] = (Pt[i] - Pt[i] @ Z.T @ F @ Z @ Pt[i]) # computing the filtered variance
+            
+            tmp = Pt[i] @ Z.T
+            sol = np.linalg.solve(Ft[i], Z @ Pt[i])
+            Ptt[i] = Pt[i] - tmp @ sol
             
             at[i] = A @ att[i-1]
             vt[i] = yt[i] - Z @ at[i]
             
-            att[i] = (at[i] + Pt[i] @ Z.T @ F @ np.transpose(vt[i]))
+            # att[i] = (at[i] + Pt[i] @ Z.T @ np.linalg.inv(Ft[i]) @ np.transpose(vt[i])) 
+            # Solve Ft[i] * x = vt[i].T
+            tmp = np.linalg.solve(Ft[i], vt[i].T)
             
-            Kt[i] = A @ Pt[i] @ Z.T @ F # Kalman gain 
+            # Then multiply
+            att[i] = at[i] + Pt[i] @ Z.T @ tmp
+            
+            # Kt[i] = A @ Pt[i] @ Z.T @ np.linalg.inv(Ft[i]) # Kalman gain 
+            tmp = Z @ Pt[i].T @ A.T
+            Kt[i] = np.linalg.solve(Ft[i], tmp.T).T
     
     loglike = 0
     n_var = len(yt[0])
@@ -668,7 +685,8 @@ def VAR1Smoothing(Y, A, Z, att, Ptt, Pt, vt, Ft, Kt):
     x_smooth = np.empty(np.shape(att))
     x_smooth[-1] = att[-1]
     
-    Jtn_0 = Ptt[-1]@ np.transpose(A) @np.linalg.inv(Pt[-1])
+    # Jtn_0 = Ptt[-1]@ np.transpose(A) @np.linalg.inv(Pt[-1])
+    Jtn_0 = np.linalg.solve(Pt[-1].T, (Ptt[-1] @ A).T).T
     
     n_rows, n_cols = np.shape(Jtn_0) 
     
@@ -697,7 +715,8 @@ def VAR1Smoothing(Y, A, Z, att, Ptt, Pt, vt, Ft, Kt):
 
     for i in range(N-2,0,-1):
         
-        Jtn[i-1] = Ptt[i-1]@ np.transpose(A) @np.linalg.inv(Pt[i])
+        # Jtn[i-1] = Ptt[i-1]@ np.transpose(A) @np.linalg.inv(Pt[i])
+        Jtn[i-1] = np.linalg.solve(Pt[i].T, (Ptt[i-1] @ A).T).T
         x_smooth[i-1]= att[i-1]+Jtn[i-1]@(x_smooth[i]-A@att[i-1])
         V_smooth[i-1] = Ptt[i-1] + Jtn[i-1]@(V_smooth[i] - Pt[i])@Jtn[i-1]
         Vt_smooth[i] = Ptt[i] @ np.transpose(Jtn[i-1]) + Jtn[i] @ (Vt_smooth[i+1] - A@Ptt[i])@np.transpose(Jtn[i-1]) 
@@ -811,7 +830,7 @@ def VAR1_em_fit(A0, H0, Q0, yt, maxiter=200, tol=10**-6):
     
     burnIn = n_var + 10
     
-    l = []
+    # l = []
         
     A = copy(A0)
     H = copy(H0)
