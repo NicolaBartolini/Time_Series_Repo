@@ -10,6 +10,7 @@ from scipy.optimize import minimize
 from copy import deepcopy, copy
 from numpy.linalg import inv
 from scipy.special import factorial, gamma
+from numba import njit
 
 
 def multivariate_gaussian_log_likelihood(data, mean, covariance):
@@ -27,6 +28,20 @@ def multivariate_gaussian_log_likelihood(data, mean, covariance):
     log_likelihood = -0.5 * (n * np.log(2 * np.pi) + np.log(np.abs(np.linalg.det(covariance))) +
                              diff @ inv_covariance @ np.transpose(diff))
 
+    return log_likelihood
+
+@njit
+def Fast_multivariate_gaussian_log_likelihood(x, mean, covariance):
+    diff = x - mean
+    sign, logdet = np.linalg.slogdet(covariance)
+    if sign <= 0:
+        return -np.inf
+
+    sol = np.linalg.solve(covariance, diff)
+    quad_form = diff @ sol
+
+    d = len(x)
+    log_likelihood = -0.5 * (d * np.log(2 * np.pi) + logdet + quad_form)
     return log_likelihood
 
 def sigmoid_like_fun(x):
@@ -219,6 +234,92 @@ def LeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0):
     
     return att, Ptt, at, Pt, vt, Ft, Kt, loglike 
 
+# Filtering function for the Lead-Lag model optimized for numba
+@njit
+def FastLeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0):
+    # Ensure everything is float64
+    Y   = Y.astype(np.float64)
+    Z_t = Z_t.astype(np.float64)
+    T_t = T_t.astype(np.float64)
+    Ht  = Ht.astype(np.float64)
+    Qt  = Qt.astype(np.float64)
+    
+    n_obs, n_y = Y.shape
+    n_state = 2 * n_y  # because a0 = [Y[0], Y[0]]
+    
+    # Initial state
+    a0 = np.empty(n_state, dtype=np.float64)
+    for j in range(n_y):
+        if np.isnan(Y[0,j]):
+            val = 0.0
+        else:
+            val = Y[0,j]
+        a0[j] = val
+        a0[j + n_y] = val
+
+    # Allocate arrays
+    at  = np.empty((n_obs, n_state), dtype=np.float64)
+    att = np.empty((n_obs, n_state), dtype=np.float64)
+    Pt  = np.empty((n_obs, n_state, n_state), dtype=np.float64)
+    Ptt = np.empty((n_obs, n_state, n_state), dtype=np.float64)
+    vt  = np.empty((n_obs, n_y), dtype=np.float64)
+    Ft  = np.empty((n_obs, n_y, n_y), dtype=np.float64)
+    Kt  = np.empty((n_obs, n_state, n_y), dtype=np.float64)
+    
+    # Initial values
+    Pt[0]  = np.eye(n_state, dtype=np.float64)
+    at[0]  = a0
+    vt0    = np.empty(n_y, dtype=np.float64)
+    for j in range(n_y):
+        vt0[j] = Y[0,j] if not np.isnan(Y[0,j]) else 0.0
+    vt[0]  = vt0
+    
+    Ft[0]  = Z_t @ Pt[0] @ Z_t.T + Ht
+    Ptt[0] = Pt[0] - Pt[0] @ Z_t.T @ np.linalg.solve(Ft[0], Z_t @ Pt[0])
+    att[0] = at[0] + Pt[0] @ Z_t.T @ np.linalg.solve(Ft[0], vt[0])
+    
+    tmp    = T_t @ Pt[0] @ Z_t.T
+    Kt[0]  = np.linalg.solve(Ft[0].T, tmp.T).T
+    
+    # === Filtering loop ===
+    for i in range(1, n_obs):
+        # Predict state covariance
+        Pt[i] = T_t @ Ptt[i-1] @ T_t.T + Qt
+        
+        # Predict innovation covariance
+        Ft[i] = Z_t @ Pt[i] @ Z_t.T + Ht
+        if np.linalg.cond(Ft[i]) > 1e12:
+            Ft[i] = Ft[i-1]
+        
+        # Filtered covariance
+        ZP = Z_t @ Pt[i]
+        Ptt[i] = Pt[i] - (Pt[i] @ Z_t.T) @ np.linalg.solve(Ft[i], ZP)
+        
+        # State prediction
+        at[i] = T_t @ att[i-1]
+        
+        # Innovation
+        for j in range(n_y):
+            if np.isnan(Y[i,j]):
+                vt[i,j] = 0.0
+            else:
+                vt[i,j] = Y[i,j] - (Z_t @ at[i])[j]
+        
+        # Update state
+        att[i] = at[i] + Pt[i] @ Z_t.T @ np.linalg.solve(Ft[i], vt[i])
+        
+        # Kalman gain
+        tmp = T_t @ Pt[i] @ Z_t.T
+        Kt[i] = np.linalg.solve(Ft[i].T, tmp.T).T
+    
+    # Log-likelihood
+    loglike = 0.0
+    mean_zero = np.zeros(n_y, dtype=np.float64)
+    for i in range(burnIn, n_obs):
+        loglike += Fast_multivariate_gaussian_log_likelihood(vt[i], mean_zero, Ft[i])
+    
+    return att, Ptt, at, Pt, vt, Ft, Kt, loglike
+
 def LeadLagSmoothing(Y, Z_t, T_t, att, Ptt, Pt, vt, Ft, Kt):
 
     # smoothing
@@ -267,6 +368,72 @@ def LeadLagSmoothing(Y, Z_t, T_t, att, Ptt, Pt, vt, Ft, Kt):
 
     return x_smooth, V_smooth, Vt_smooth 
 
+# Smooting function for the Lead-Lag model optimized for numba
+@njit
+def FastLeadLagSmoothing(Y, Z_t, T_t, att, Ptt, Pt, vt, Ft, Kt):
+    
+    Y   = Y.astype(np.float64)
+    Z_t = Z_t.astype(np.float64)
+    T_t = T_t.astype(np.float64)
+    att  = att.astype(np.float64)
+    Ptt  = Ptt.astype(np.float64)
+    vt  = vt.astype(np.float64)
+    Pt  = Pt.astype(np.float64) 
+    Kt  = Kt.astype(np.float64)
+    Ft  = Ft.astype(np.float64)
+    
+    # smoothing
+    
+    x_smooth = np.empty(np.shape(att))
+    x_smooth[-1] = att[-1]
+    
+    # Jtn_0 = Ptt[-1]@ np.transpose(T_t) @np.linalg.inv(Pt[-1])
+    tmp = Ptt[-1] @ T_t.T
+    Jtn_0 = np.linalg.solve(Pt[-1].T, tmp.T).T
+
+    
+    N = len(Y)
+    M = np.shape(Jtn_0)[0] 
+    K = np.shape(Jtn_0)[1]
+    
+    Jtn = np.empty((N-1, M, K))
+    Jtn[-1] = Jtn_0
+    
+    x_smooth[-2]= att[-2]+Jtn[-1]@(x_smooth[-1]-T_t@att[-2])
+    
+    # The aoutocorrelation = Vt_smooth
+    Vt_smooth_n = (np.eye(len(att[0])) - Kt[-1]@Z_t) @ T_t @ Ptt[-2]
+    
+    M = np.shape(Vt_smooth_n)[0] 
+    K = np.shape(Vt_smooth_n)[1]
+    
+    Vt_smooth = np.empty((N,M,K))
+    Vt_smooth[-1] = Vt_smooth_n
+    
+    # Vt
+    
+    V_smooth_n = Ptt[-1]
+    V_smooth_n1 = Ptt[-2] + Jtn[-1]@(V_smooth_n - Pt[-1])@Jtn[-1]
+    
+    M = np.shape(V_smooth_n)[0] 
+    K = np.shape(V_smooth_n)[1]
+    
+    V_smooth = np.empty((N,M,K))
+    V_smooth[-1] = V_smooth_n
+    V_smooth[-2] = V_smooth_n1
+    
+    for i in range(N-2,0,-1):
+        
+        # Jtn[i-1] = Ptt[i-1]@ np.transpose(T_t) @np.linalg.inv(Pt[i]) 
+        tmp = Ptt[i-1] @ T_t.T
+        Jtn[i-1] = np.linalg.solve(Pt[i].T, tmp.T).T
+
+        x_smooth[i-1]= att[i-1]+Jtn[i-1]@(x_smooth[i]-T_t@att[i-1])
+        V_smooth[i-1] = Ptt[i-1] + Jtn[i-1]@(V_smooth[i] - Pt[i])@Jtn[i-1]
+        Vt_smooth[i] = Ptt[i] @ np.transpose(Jtn[i-1]) + Jtn[i] @ (Vt_smooth[i+1] - T_t@Ptt[i])@np.transpose(Jtn[i-1]) 
+
+    return x_smooth, V_smooth, Vt_smooth 
+
 def LeadLagObjFun(params, yt):
     
     n_var = len(yt[0])
@@ -297,7 +464,7 @@ def LeadLagObjFun(params, yt):
     Z_t = np.hstack((np.eye(n_var), np.zeros((n_var, n_var))))
     # print(H)
     
-    att, Ptt, at, Pt, vt, Ft, Kt, loglike = LeadLagKF(yt, Z_t, T_t, H, Q_t, burnIn=10)
+    att, Ptt, at, Pt, vt, Ft, Kt, loglike = FastLeadLagKF(yt, Z_t, T_t, H, Q_t, burnIn=10)
     
     return -loglike
 
@@ -425,7 +592,7 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
             
             if True in np.isnan(y[t,:]):
                 
-                nan_index = np.where(np.isnan(y[t,:]))
+                # nan_index = np.where(np.isnan(y[t,:]))
                 no_nan_index = np.where(~np.isnan(y[t,:]))
                 
                 y1 = np.zeros(np.shape(copy(y[t,:])))
@@ -678,6 +845,122 @@ def VAR1_kalman_filter(yt, A, Z, H, Q, burnIn = 0):
     
     return att, Ptt, at, Pt, vt, Ft, Kt, loglike  
 
+@njit
+def FastVAR1_kalman_filter(yt, A, Z, H, Q, burnIn=0):
+    
+    yt = yt.astype(np.float64)
+    A = A.astype(np.float64) 
+    Z = Z.astype(np.float64)
+    H = H.astype(np.float64)
+    Q = Q.astype(np.float64)
+    
+    n_var = yt.shape[1]
+    N = yt.shape[0]
+    
+    Pt = np.zeros((N, n_var, n_var))
+    Pt[0] = np.eye(len(Q))
+    
+    F0 = Z @ Pt[0] @ np.transpose(Z) + H
+    Ft = np.zeros((N, F0.shape[0], F0.shape[1]))
+    Ft[0] = F0
+    
+    # Initial filtered covariance
+    ZP = Z @ Pt[0]
+    Ptt0 = Pt[0] - Pt[0] @ np.transpose(Z) @ np.linalg.solve(Ft[0], ZP)
+    Ptt = np.zeros((N, Ptt0.shape[0], Ptt0.shape[1]))
+    Ptt[0] = Ptt0
+    
+    # Initial Kalman gain
+    tmp = A @ Pt[0] @ np.transpose(Z)
+    K0 = np.linalg.solve(Ft[0].T, tmp.T).T
+    Kt = np.zeros((N, K0.shape[0], K0.shape[1]))
+    Kt[0] = K0
+    
+    at = np.zeros((N, n_var))
+    att = np.zeros((N, n_var))
+    vt = np.zeros((N, n_var))
+    
+    a0 = yt[0]
+    at[0] = a0
+    
+    vt0 = yt[0] - a0
+    for j in range(n_var):
+        if np.isnan(vt0[j]):
+            vt0[j] = 0.0
+    vt[0] = vt0
+    
+    tmp0 = Pt[0] @ np.transpose(Z)
+    att[0] = at[0] + tmp0 @ np.linalg.solve(Ft[0], vt[0])
+    
+    for i in range(1, N):
+        nan_index = np.isnan(yt[i])
+    
+        if np.any(nan_index):
+            y = np.copy(yt[i])
+            for j in range(n_var):
+                if nan_index[j]:
+                    y[j] = 0.0
+    
+            Z_mod = np.copy(Z)
+            for j in range(Z.shape[0]):
+                for k in range(Z.shape[1]):
+                    if nan_index[j]:
+                        Z_mod[j, k] = 0.0
+    
+            if i >= 2:
+                m = np.mean(Pt[i-1] - Pt[i-2])
+                if abs(m) < 1e-3:
+                    Pt[i] = Pt[i-1]
+                else:
+                    Pt[i] = A @ Ptt[i-1] @ A.T + Q
+            else:
+                Pt[i] = A @ Ptt[i-1] @ A.T + Q
+    
+            auxH = np.eye(H.shape[0])
+            for j in range(H.shape[0]):
+                if not nan_index[j]:
+                    auxH[j, j] = H[j, j]
+    
+            Ft[i] = Z_mod @ Pt[i] @ np.transpose(Z_mod) + auxH
+    
+            sol = np.linalg.solve(Ft[i], Z_mod @ Pt[i])
+            Ptt[i] = Pt[i] - Pt[i] @ np.transpose(Z_mod) @ sol
+    
+            at[i] = A @ att[i-1]
+            vt[i] = y - Z_mod @ at[i]
+            att[i] = at[i] + Pt[i] @ np.transpose(Z_mod) @ np.linalg.solve(Ft[i], vt[i])
+    
+            tmp = Z_mod @ Pt[i].T @ A.T
+            Kt[i] = np.linalg.solve(Ft[i], tmp.T).T
+    
+        else:
+            if i >= 2:
+                m = np.mean(Pt[i-1] - Pt[i-2])
+                if abs(m) < 1e-3:
+                    Pt[i] = Pt[i-1]
+                else:
+                    Pt[i] = A @ Ptt[i-1] @ A.T + Q
+            else:
+                Pt[i] = A @ Ptt[i-1] @ A.T + Q
+    
+            Ft[i] = Z @ Pt[i] @ np.transpose(Z) + H
+    
+            sol = np.linalg.solve(Ft[i], Z @ Pt[i])
+            Ptt[i] = Pt[i] - Pt[i] @ np.transpose(Z) @ sol
+    
+            at[i] = A @ att[i-1]
+            vt[i] = yt[i] - Z @ at[i]
+            att[i] = at[i] + Pt[i] @ np.transpose(Z) @ np.linalg.solve(Ft[i], vt[i])
+    
+            tmp = Z @ Pt[i].T @ A.T
+            Kt[i] = np.linalg.solve(Ft[i], tmp.T).T
+    
+    loglike = 0.0
+    for i in range(burnIn, N):
+        loglike += Fast_multivariate_gaussian_log_likelihood(vt[i], np.zeros(n_var), Ft[i])
+    
+    return att, Ptt, at, Pt, vt, Ft, Kt, loglike
+
 def VAR1Smoothing(Y, A, Z, att, Ptt, Pt, vt, Ft, Kt):
 
     N = len(Y)
@@ -723,6 +1006,49 @@ def VAR1Smoothing(Y, A, Z, att, Ptt, Pt, vt, Ft, Kt):
 
     return x_smooth, V_smooth, Vt_smooth 
 
+@njit
+def FastVAR1Smoothing(Y, A, Z, att, Ptt, Pt, vt, Ft, Kt):
+    N = len(Y)
+    
+    # smoothed states
+    x_smooth = np.empty_like(att)
+    x_smooth[-1] = att[-1]
+    
+    # initial Jtn
+    Jtn_0 = np.linalg.solve(Pt[-1].T, (Ptt[-1] @ A).T).T
+    n_rows, n_cols = Jtn_0.shape
+    Jtn = np.empty((N-1, n_rows, n_cols))
+    Jtn[-1] = Jtn_0
+    
+    # second to last smoother update
+    x_smooth[-2] = att[-2] + Jtn[-1] @ (x_smooth[-1] - A @ att[-2])
+    
+    # Vt_smooth
+    Vt_smooth_n = (np.eye(att.shape[1]) - Kt[-1] @ Z) @ A @ Ptt[-2]
+    n_rows, n_cols = Vt_smooth_n.shape
+    Vt_smooth = np.empty((N, n_rows, n_cols))
+    Vt_smooth[-1] = Vt_smooth_n
+    
+    # V_smooth
+    V_smooth_n = Ptt[-1]
+    V_smooth_n1 = Ptt[-2] + Jtn[-1] @ (V_smooth_n - Pt[-1]) @ Jtn[-1]
+    
+    n_rows, n_cols = V_smooth_n.shape
+    V_smooth = np.empty((N, n_rows, n_cols))
+    V_smooth[-1] = V_smooth_n
+    V_smooth[-2] = V_smooth_n1
+    
+    # backward recursion
+    for i in range(N-2, 0, -1):
+        Jtn[i-1] = np.linalg.solve(Pt[i].T, (Ptt[i-1] @ A).T).T
+        x_smooth[i-1] = att[i-1] + Jtn[i-1] @ (x_smooth[i] - A @ att[i-1])
+        V_smooth[i-1] = Ptt[i-1] + Jtn[i-1] @ (V_smooth[i] - Pt[i]) @ Jtn[i-1]
+    
+        # cross-covariance update
+        Vt_smooth[i] = Ptt[i] @ Jtn[i-1].T + Jtn[i-1] @ (Vt_smooth[i+1] - A @ Ptt[i]) @ Jtn[i-1].T
+        
+    return x_smooth, V_smooth, Vt_smooth
+
 def VAR1_obj_fun(params, yt):
     
     n_var = len(yt[0])
@@ -744,7 +1070,7 @@ def VAR1_obj_fun(params, yt):
     
     Z = np.eye(n_var)
     
-    att, Ptt, at, Pt, vt, Ft, Kt, loglike = VAR1_kalman_filter(yt, A, Z, H, Q)
+    att, Ptt, at, Pt, vt, Ft, Kt, loglike = FastVAR1_kalman_filter(yt, A, Z, H, Q)
     
     return -loglike 
 
