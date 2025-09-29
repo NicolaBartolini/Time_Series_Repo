@@ -38,32 +38,6 @@ def TSRV(log_prices, K):
 
     return c*(avg_rv - (n_bar/n)*rv)
 
-def TSCOV(log_prices1, log_prices2, K):
-
-    # this is the function that returns the two scale realized covariance estimator
-
-    # Article : Estimating covariation: Epps effect, microstructure noise
-    # Authors : Lan Zhang
-    # Year : 2010
-
-    n = len(log_prices1)
-
-    n_bar = (n-K+1)/(K)
-
-    c = (1 - n_bar/n)**(-1)
-
-    avg_log_returns1 = log_prices1[K:] - log_prices1[0:n-K]
-    avg_log_returns2 = log_prices2[K:] - log_prices2[0:n-K]
-
-    avg_cov = np.sum(avg_log_returns1*avg_log_returns2)/K
-
-    log_returns1 = log_prices1[1:] - log_prices1[0:-1]
-    log_returns2 = log_prices2[1:] - log_prices2[0:-1]
-
-    cov = np.sum(log_returns1*log_returns2)
-
-    return c*(avg_cov - (n_bar/n)*cov)
-
 
 # Corrected version from Corsi, Pirino and Renò 
 # Threshold bipower variation and the impact of jumps on volatility forecasting 
@@ -126,23 +100,11 @@ def filtered_variance(rt, c=3, L=25, n_iter=3, tol=1e-6):
     
     Vt = np.empty(len(rt))
     
-    # for i in range(0, L):
-        
-    #     xt = rt[i:i+2*L]
-        
-    #     Vt[i] = point_filtered_variance(xt, c, L, n_iter, tol) 
-    
     for i in range(L, len(rt)-L):
         
         xt = rt[i-L:i+L]
         
         Vt[i] = point_filtered_variance(xt, c, L, n_iter, tol)  
-    
-    # for i in range(len(rt)-L, len(rt)):
-        
-    #     xt = rt[i- 2*L: i]
-        
-    #     Vt[i] = point_filtered_variance(xt, c, L, n_iter, tol) 
     
     Vt[0:L] = np.mean(Vt[L: len(rt)-L])
     Vt[len(rt)-L : len(rt)] = np.mean(Vt[L: len(rt)-L]) 
@@ -186,7 +148,7 @@ def CTTriPV(rt, delta, c=3, L=25, n_iter=3, tol=1e-6):
         r3 = rt[i]
         r2 = rt[i-1] 
         r1 = rt[i-2] 
-            
+        
         result += Z_gamma(r3, c**2 * Vt[i], c, 4/3) * Z_gamma(r2, c**2 * Vt[i-1], c,4/3) * Z_gamma(r1, c**2 * Vt[i-2], c, 4/3) 
         
     return result / (mu3**3* delta)
@@ -205,3 +167,41 @@ def CTz(rv, ctbpv, cttripv, delta):
     statistic = 1/delta**.5 * num/den 
     
     return statistic 
+
+
+########### Covarianvce estimators #####################
+
+
+def RCOV(log_prices1, log_prices2):
+    
+    # Realizded covarinace
+    
+    return np.sum((np.log(log_prices1[1:]) - np.log(log_prices1[:-1])) * (np.log(log_prices2[1:]) - np.log(log_prices2[:-1]))) 
+
+    
+def TSCOV(log_prices1, log_prices2, K):
+
+    # this is the function that returns the two scale realized covariance estimator
+
+    # Article : Estimating covariation: Epps effect, microstructure noise
+    # Authors : Lan Zhang
+    # Year : 2010
+
+    n = len(log_prices1)
+
+    n_bar = (n-K+1)/(K)
+
+    c = (1 - n_bar/n)**(-1)
+
+    avg_log_returns1 = log_prices1[K:] - log_prices1[0:n-K]
+    avg_log_returns2 = log_prices2[K:] - log_prices2[0:n-K]
+
+    avg_cov = np.sum(avg_log_returns1*avg_log_returns2)/K
+
+    log_returns1 = log_prices1[1:] - log_prices1[0:-1]
+    log_returns2 = log_prices2[1:] - log_prices2[0:-1]
+
+    cov = np.sum(log_returns1*log_returns2)
+
+    return c*(avg_cov - (n_bar/n)*cov)
+
