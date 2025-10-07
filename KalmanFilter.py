@@ -11,6 +11,7 @@ from copy import deepcopy, copy
 from numpy.linalg import inv
 from scipy.special import factorial, gamma
 from numba import njit
+from math import pi
 
 
 def multivariate_gaussian_log_likelihood(data, mean, covariance):
@@ -27,7 +28,7 @@ def multivariate_gaussian_log_likelihood(data, mean, covariance):
     
     log_likelihood = -0.5 * (n * np.log(2 * np.pi) + np.log(np.abs(np.linalg.det(covariance))) +
                              diff @ inv_covariance @ np.transpose(diff))
-
+    
     return log_likelihood
 
 @njit
@@ -39,10 +40,11 @@ def Fast_multivariate_gaussian_log_likelihood(x, mean, covariance):
 
     sol = np.linalg.solve(covariance, diff)
     quad_form = diff @ sol
-
+    
     d = len(x)
     log_likelihood = -0.5 * (d * np.log(2 * np.pi) + logdet + quad_form)
     return log_likelihood
+
 
 def sigmoid_like_fun(x):
     
@@ -236,7 +238,7 @@ def LeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0):
 
 # Filtering function for the Lead-Lag model optimized for numba
 @njit
-def FastLeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0):
+def FastLeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0, Lasso=False, lambda_=.5, Ridge=False, lambda2_=.5):
     # Ensure everything is float64
     Y   = Y.astype(np.float64)
     Z_t = Z_t.astype(np.float64)
@@ -288,7 +290,11 @@ def FastLeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0):
         
         # Predict innovation covariance
         Ft[i] = Z_t @ Pt[i] @ Z_t.T + Ht
-        if np.linalg.cond(Ft[i]) > 1e12:
+        # if np.linalg.cond(Ft[i]) > 1e12:
+        #     Ft[i] = Ft[i-1]
+        
+        det_Ft = np.linalg.det(Ft[i])
+        if np.abs(det_Ft) < 1e-12:
             Ft[i] = Ft[i-1]
         
         # Filtered covariance
@@ -315,9 +321,29 @@ def FastLeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0):
     # Log-likelihood
     loglike = 0.0
     mean_zero = np.zeros(n_y, dtype=np.float64)
+    
     for i in range(burnIn, n_obs):
         loglike += Fast_multivariate_gaussian_log_likelihood(vt[i], mean_zero, Ft[i])
-    
+        
+        if Lasso:
+            penalty = lambda_ * np.sum(np.abs((T_t[:n_y,:n_y]-np.eye(n_y))).flatten())   # penalizing by thelead-lag parameters
+            loglike = loglike - penalty
+            
+        # elif Lasso and Full:
+        #     penalty += lambda_ * np.sum(np.abs(Ht.flatten()))
+        #     penalty += lambda_ * np.sum(np.abs(Qt[:n_y,:n_y].flatten()))
+        #     loglike = loglike - penalty
+        
+        if Ridge:
+            penalty = lambda2_ * np.sqrt(np.sum(np.abs((T_t[:n_y,:n_y]-np.eye(n_y))).flatten()**2 ))   # penalizing by thelead-lag parameters
+            loglike = loglike - penalty
+            
+        # elif Ridge and Full:
+        #     penalty = lambda2_ * np.sqrt(np.sum(np.abs((T_t[:n_y,:n_y]-np.eye(n_y))).flatten()**2 ))   # penalizing by thelead-lag parameters
+        #     penalty += lambda_ * np.sum(np.abs(Ht.flatten()**2))
+        #     penalty += lambda_ * np.sum(np.abs(Qt[:n_y,:n_y].flatten()))
+        #     loglike = loglike - penalty
+  
     return att, Ptt, at, Pt, vt, Ft, Kt, loglike
 
 def LeadLagSmoothing(Y, Z_t, T_t, att, Ptt, Pt, vt, Ft, Kt):
@@ -434,12 +460,16 @@ def FastLeadLagSmoothing(Y, Z_t, T_t, att, Ptt, Pt, vt, Ft, Kt):
 
     return x_smooth, V_smooth, Vt_smooth 
 
-def LeadLagObjFun(params, yt):
+def LeadLagObjFun(params, yt, burnIn=10, K=None, Lasso=False, lambda_ = .5, Ridge=False, lamda2_=.5):
     
     n_var = len(yt[0])
     # n_corr = int(factorial(n_var)/(2*factorial(n_var-2)))
     
-    leadlag_par = params[:n_var*n_var]
+    if K==None:
+        leadlag_par = params[:n_var*n_var]
+    else:
+        leadlag_par = K * 2/pi * np.arctan(params[:n_var*n_var])
+    
     H_sigmas = np.exp(params[n_var*n_var : n_var*n_var + n_var])
     Q_sigmas = np.exp(params[n_var*n_var + n_var : n_var*n_var + n_var*2])
     Q_rhos = sigmoid_like_fun(params[n_var*n_var + n_var*2 : ])
@@ -464,16 +494,19 @@ def LeadLagObjFun(params, yt):
     Z_t = np.hstack((np.eye(n_var), np.zeros((n_var, n_var))))
     # print(H)
     
-    att, Ptt, at, Pt, vt, Ft, Kt, loglike = FastLeadLagKF(yt, Z_t, T_t, H, Q_t, burnIn=10)
-    
+    att, Ptt, at, Pt, vt, Ft, Kt, loglike = FastLeadLagKF(yt, Z_t, T_t, H, Q_t, burnIn, Lasso, lambda_, Ridge, lamda2_)
+    # print(loglike)
     return -loglike
 
-def LeadLagObjFun2(params, yt):
+def LeadLagObjFun2(params, yt, K = 1):
     # This functionis for fitting the restricted model without cross lead-lag effects
     n_var = len(yt[0])
     # n_corr = int(factorial(n_var)/(2*factorial(n_var-2)))
     
-    leadlag_par = params[:n_var]
+    # leadlag_par = params[:n_var] 
+    
+    leadlag_par = K * 2/pi * np.arctan(params[:n_var] )
+    
     H_sigmas = np.exp(params[n_var : n_var + n_var])
     Q_sigmas = np.exp(params[n_var + n_var : n_var*n_var + n_var*2])
     Q_rhos = sigmoid_like_fun(params[n_var + n_var*2 : ])
@@ -502,10 +535,10 @@ def LeadLagObjFun2(params, yt):
     
     return -loglike
 
-def LeadLagMLfit(params, yt, n_var, model=1):
+def LeadLagMLfit(params, yt, n_var, model=1, burnIn=10, K=None, Lasso=False, lambda_ = .5, Ridge=False, lambda2_=.5):
     
     if model==1:
-        res = minimize(LeadLagObjFun, params, args=(yt), method='BFGS')
+        res = minimize(LeadLagObjFun, params, args=(yt, burnIn, K, Lasso, lambda_, Ridge, lambda2_), method='BFGS')
         
         fitted_params = res.x 
         
@@ -846,7 +879,7 @@ def VAR1_kalman_filter(yt, A, Z, H, Q, burnIn = 0):
     return att, Ptt, at, Pt, vt, Ft, Kt, loglike  
 
 @njit
-def FastVAR1_kalman_filter(yt, A, Z, H, Q, burnIn=0):
+def FastVAR1_kalman_filter(yt, A, Z, H, Q, burnIn=0, Lasso=False, lambda_ = .5, Ridge=False, lamda2_=.5):
     
     yt = yt.astype(np.float64)
     A = A.astype(np.float64) 
@@ -1049,7 +1082,7 @@ def FastVAR1Smoothing(Y, A, Z, att, Ptt, Pt, vt, Ft, Kt):
         
     return x_smooth, V_smooth, Vt_smooth
 
-def VAR1_obj_fun(params, yt):
+def VAR1_obj_fun(params, yt, Lasso=False, lambda_ = .5, Ridge=False, lamda2_=.5):
     
     n_var = len(yt[0])
     n_corr = int(factorial(n_var)/(2*factorial(n_var-2)))
@@ -1070,11 +1103,11 @@ def VAR1_obj_fun(params, yt):
     
     Z = np.eye(n_var)
     
-    att, Ptt, at, Pt, vt, Ft, Kt, loglike = FastVAR1_kalman_filter(yt, A, Z, H, Q)
+    att, Ptt, at, Pt, vt, Ft, Kt, loglike = FastVAR1_kalman_filter(yt, A, Z, H, Q, Lasso=False, lambda_ = .5, Ridge=False, lamda2_=.5)
     
     return -loglike 
 
-def VAR1_obj_fun2(params, yt):
+def VAR1_obj_fun2(params, yt, Lasso=False, lambda_ = .5, Ridge=False, lamda2_=.5):
     
     n_var = len(yt[0])
     n_corr = int(factorial(n_var)/(2*factorial(n_var-2)))
@@ -1096,17 +1129,17 @@ def VAR1_obj_fun2(params, yt):
     
     Z = np.eye(n_var)
     
-    att, Ptt, at, Pt, vt, Ft, Kt, loglike = VAR1_kalman_filter(yt, A, Z, H, Q)
+    att, Ptt, at, Pt, vt, Ft, Kt, loglike = FastVAR1_kalman_filter(yt, A, Z, H, Q, Lasso, lambda_, Ridge, lamda2_)
     
     return -loglike 
 
-def VAR1_ml_fit(params, yt, model=1):
+def VAR1_ml_fit(params, yt, model=1, Lasso=False, lambda_ = .5, Ridge=False, lamda2_=.5):
     
     n_var = len(yt[0])
     n_corr = int(factorial(n_var)/(2*factorial(n_var-2)))
     
     if model==1:
-        res = minimize(VAR1_obj_fun, params, args=(yt), method='BFGS')
+        res = minimize(VAR1_obj_fun, params, args=(yt, Lasso, lambda_, Ridge, lamda2_), method='BFGS')
         
         fitted_par = res.x 
         autoreg_par = fitted_par[:n_var*n_var]
@@ -1126,7 +1159,7 @@ def VAR1_ml_fit(params, yt, model=1):
     
     elif model==2:
         
-        res = minimize(VAR1_obj_fun2, params, args=(yt), method='BFGS')
+        res = minimize(VAR1_obj_fun2, params, args=(yt, Lasso, lambda_, Ridge, lamda2_), method='BFGS')
         
         fitted_par = res.x 
         autoreg_par = fitted_par[:n_var]
