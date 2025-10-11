@@ -13,6 +13,39 @@ from scipy.special import factorial, gamma
 from numba import njit
 from math import pi
 
+@njit
+def my_factorial(n):
+    
+    if n==0 or n==1:
+        return 1
+    
+    result = 1
+    
+    i = 0
+    
+    while n-i>1:
+        
+        result = result * (n-i)
+        
+        i+=1
+    return result
+
+
+@njit
+def sanitize_square(mat, d, jitter=1e-12):
+    for i in range(d):
+        for j in range(d):
+            if not np.isfinite(mat[i, j]):
+                mat[i, j] = 0.0
+    for i in range(d):
+        mat[i, i] += jitter
+    # Symmetrize
+    for i in range(d):
+        for j in range(i + 1, d):
+            avg = 0.5 * (mat[i, j] + mat[j, i])
+            mat[i, j] = avg
+            mat[j, i] = avg
+
 
 def multivariate_gaussian_log_likelihood(data, mean, covariance):
     # n, d = data.shape
@@ -45,6 +78,27 @@ def Fast_multivariate_gaussian_log_likelihood(x, mean, covariance):
     log_likelihood = -0.5 * (d * np.log(2 * np.pi) + logdet + quad_form)
     return log_likelihood
 
+@njit 
+def Fast_multivariate_gaussian_log_likelihood_approx(x, mean, covariance, n=40):
+    # this formula uses polynomial approximation (Taylor around zero) for the log
+    # It is usefull when the variance covariance matrix is small
+    diff = x-mean 
+    sol = np.linalg.solve(covariance, diff)
+    quad_form = diff @ sol 
+    
+    a = np.abs(np.linalg.det(covariance)) - 1
+    
+    result = 0
+    
+    for i in range(1, n+1):
+        
+        result += (-1)**(i+1) * a**i / i 
+    
+    result = result *.5
+    
+    result += quad_form
+    
+    return result
 
 def sigmoid_like_fun(x):
     
@@ -346,6 +400,7 @@ def FastLeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0, Lasso=False, lambda_=.5, Ridge=
   
     return att, Ptt, at, Pt, vt, Ft, Kt, loglike
 
+
 def LeadLagSmoothing(Y, Z_t, T_t, att, Ptt, Pt, vt, Ft, Kt):
 
     # smoothing
@@ -387,7 +442,10 @@ def LeadLagSmoothing(Y, Z_t, T_t, att, Ptt, Pt, vt, Ft, Kt):
     
     for i in range(N-2,0,-1):
         
-        Jtn[i-1] = Ptt[i-1]@ np.transpose(T_t) @np.linalg.inv(Pt[i])
+        # Jtn[i-1] = Ptt[i-1]@ np.transpose(T_t) @np.linalg.inv(Pt[i])
+        temp = T_t @ Ptt[i-1].T
+        Jtn[i-1] = np.linalg.solve(Pt[i].T, temp).T
+        
         x_smooth[i-1]= att[i-1]+Jtn[i-1]@(x_smooth[i]-T_t@att[i-1])
         V_smooth[i-1] = Ptt[i-1] + Jtn[i-1]@(V_smooth[i] - Pt[i])@Jtn[i-1]
         Vt_smooth[i] = Ptt[i] @ np.transpose(Jtn[i-1]) + Jtn[i] @ (Vt_smooth[i+1] - T_t@Ptt[i])@np.transpose(Jtn[i-1]) 
@@ -498,14 +556,19 @@ def LeadLagObjFun(params, yt, burnIn=10, K=None, Lasso=False, lambda_ = .5, Ridg
     # print(loglike)
     return -loglike
 
-def LeadLagObjFun2(params, yt, K = 1):
+def LeadLagObjFun2(params, yt, burnIn=10, K=None, Lasso=False, lambda_ = .5, Ridge=False, lamda2_=.5):
     # This functionis for fitting the restricted model without cross lead-lag effects
     n_var = len(yt[0])
     # n_corr = int(factorial(n_var)/(2*factorial(n_var-2)))
     
     # leadlag_par = params[:n_var] 
     
-    leadlag_par = K * 2/pi * np.arctan(params[:n_var] )
+    # leadlag_par = K * 2/pi * np.arctan(params[:n_var] )
+    
+    if K==None:
+        leadlag_par = params[:n_var]
+    else:
+        leadlag_par = K * 2/pi * np.arctan(params[:n_var] )
     
     H_sigmas = np.exp(params[n_var : n_var + n_var])
     Q_sigmas = np.exp(params[n_var + n_var : n_var*n_var + n_var*2])
@@ -531,7 +594,8 @@ def LeadLagObjFun2(params, yt, K = 1):
     Z_t = np.hstack((np.eye(n_var), np.zeros((n_var, n_var))))
     # print(H)
     
-    att, Ptt, at, Pt, vt, Ft, Kt, loglike = LeadLagKF(yt, Z_t, T_t, H, Q_t, burnIn=10)
+    # att, Ptt, at, Pt, vt, Ft, Kt, loglike = LeadLagKF(yt, Z_t, T_t, H, Q_t, burnIn=10)
+    att, Ptt, at, Pt, vt, Ft, Kt, loglike = FastLeadLagKF(yt, Z_t, T_t, H, Q_t, burnIn, Lasso, lambda_, Ridge, lamda2_)
     
     return -loglike
 
@@ -552,7 +616,7 @@ def LeadLagMLfit(params, yt, n_var, model=1, burnIn=10, K=None, Lasso=False, lam
         
     elif model==2:
         
-        res = minimize(LeadLagObjFun2, params, args=(yt), method='BFGS')
+        res = minimize(LeadLagObjFun2, params, args=(yt, burnIn, K, Lasso, lambda_, Ridge, lambda2_), method='BFGS')
         
         fitted_params = res.x 
         
@@ -728,6 +792,351 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
             print('N. of iteration: '+str(i))
     
     return F, R, Q, att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, vt, Ft, loglike
+
+
+def Fast_LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=1e-4):
+    # === keep math identical, only add defensive checks & tiny regularizers ===
+
+    # copies and ensure float64
+    Q = Q_init.copy().astype(np.float64)
+    R = R_init.copy().astype(np.float64)   # <-- important: ensure R is float64
+    F = F_init.copy().astype(np.float64)
+
+    y = y.astype(np.float64)
+
+    T, d = y.shape
+    Id = np.eye(d)
+    P = np.hstack((Id, np.zeros((d, d))))
+    burnIn = d + 10
+
+    l = np.ones(maxiter + 1) * 1e10
+    l_old = 1e10
+
+    # small jitter to keep matrices PD (non-invasive)
+    jitter = 1e-12
+
+    # helper: sanitize a square matrix in-place
+    def _sanitize_square(mat):
+        # make finite
+        if np.any(~np.isfinite(mat)):
+            # replace non-finite with small diagonal
+            mat[:] = 0.0
+            for ii in range(mat.shape[0]):
+                mat[ii, ii] = jitter
+        # symmetrize small asymmetries
+        mat[:] = 0.5 * (mat + mat.T)
+
+    # initial sanitize
+    _sanitize_square(Q[:d, :d])
+    _sanitize_square(R)
+
+    for i in range(1, maxiter + 1):
+        S = np.zeros((2 * d, 2 * d))
+        S10 = np.zeros((2 * d, 2 * d))
+        eps_smooth = np.zeros((d, d))
+
+        # Call the KF / smoother (preserve same API)
+        att, Ptt, at, Pt, vt, Ft, Kt, loglike = FastLeadLagKF(y, C, F, R, Q, burnIn)
+        # defensive check: ensure returned matrices are finite
+        # check a few important arrays: Pt, Ptt, Ft
+        if np.any(~np.isfinite(Pt)):
+            raise ValueError("NaN/Inf detected in Pt returned by FastLeadLagKF. "
+                             "Inspect Pt (shapes: Pt.shape=%s)."
+                             % (str(Pt.shape),))
+        if np.any(~np.isfinite(Ptt)):
+            raise ValueError("NaN/Inf detected in Ptt returned by FastLeadLagKF. "
+                             "Inspect Ptt (shapes: Ptt.shape).")
+        if np.any(~np.isfinite(Ft)):
+            raise ValueError("NaN/Inf detected in Ft returned by FastLeadLagKF. "
+                             "Inspect Ft (shapes: Ft.shape).")
+
+        x_smooth, V_smooth, Vt_smooth = FastLeadLagSmoothing(y, C, F, att, Ptt, Pt, vt, Ft, Kt)
+
+        for t in range(burnIn, T):
+            l[i] = loglike
+            l_old = abs(l[i - 1] - loglike)
+
+            # detect NaNs in observation row
+            has_nan = False
+            for jj in range(d):
+                if np.isnan(y[t, jj]):
+                    has_nan = True
+                    break
+
+            if has_nan:
+                # build y1 with available entries
+                y1 = np.zeros((d, 1))
+                for jj in range(d):
+                    if not np.isnan(y[t, jj]):
+                        y1[jj, 0] = y[t, jj]
+
+                x = x_smooth[t, :].reshape((2 * d, 1))
+                x1 = x_smooth[t - 1, :].reshape((2 * d, 1))
+
+                S += x @ x.T + V_smooth[t]
+                S10 += x1 @ x1.T + Vt_smooth[t]
+
+                auxC = np.zeros(C.shape)
+                for jj in range(d):
+                    if not np.isnan(y[t, jj]):
+                        auxC[jj, :] = C[jj, :]
+
+                R2 = R.copy()
+                for jj in range(d):
+                    if not np.isnan(y[t, jj]):
+                        R2[jj, jj] = 0.0
+
+                auxY = y1
+                eps_smooth += (auxY - auxC @ x) @ (auxY - auxC @ x).T + auxC @ V_smooth[t] @ auxC.T + R2
+
+            else:
+                x = x_smooth[t, :].reshape((2 * d, 1))
+                x1 = x_smooth[t - 1, :].reshape((2 * d, 1))
+                S += x @ x.T + V_smooth[t]
+                S10 += x1 @ x1.T + Vt_smooth[t]
+                auxY = y[t, :].reshape((d, 1))
+                eps_smooth += (auxY - C @ x) @ (auxY - C @ x).T + C @ V_smooth[t] @ C.T
+
+        # NOTE: keep identical indexing/shape semantics as original
+        x = x_smooth[T - 2, :].reshape((2 * d, 1))
+        x1 = x_smooth[burnIn - 1, :].reshape((2 * d, 1))
+
+        S00 = S - x @ x.T - V_smooth[T - 1] + x1 @ x1.T + V_smooth[burnIn - 1]
+        S11 = S.copy()
+        BB = S10.copy()
+        AA = S00.copy()
+        CC = S11.copy()
+
+        BB1 = BB[0:d, 0:d]
+        BB2 = BB[0:d, d:]
+        BBtilde = np.hstack((BB1, BB2))
+
+        AA11 = AA[0:d, 0:d]
+        AA12 = AA[0:d, d:]
+        AA21 = AA[d:, 0:d]
+        AA22 = AA[d:, d:]
+
+        Gamma = BB1 - BB2 - AA11 + AA12
+        Theta = AA11 + AA22 - AA12 - AA21
+
+        # small safeguard: if Theta has NaNs/Infs, replace them with tiny diag
+        if np.any(~np.isfinite(Theta)):
+            Theta[:] = 0.0
+            for jj in range(d):
+                Theta[jj, jj] = jitter
+
+        # invert Theta (if near-singular, add tiny jitter)
+        try:
+            invTheta = np.linalg.inv(Theta)
+        except np.linalg.LinAlgError:
+            Theta = Theta + jitter * np.eye(d)
+            invTheta = np.linalg.inv(Theta)
+
+        auxF = Gamma @ invTheta
+        Ftilde = np.hstack((Id + auxF, -auxF))
+
+        auxQ = P @ CC @ P.T - BBtilde @ Ftilde.T - Ftilde @ BBtilde.T + Ftilde @ AA @ Ftilde.T
+        denom = float((T - burnIn + 1))
+        if denom == 0.0:
+            denom = 1.0
+        auxQ = auxQ / denom
+
+        # symmetrize auxQ and enforce finite
+        if np.any(~np.isfinite(auxQ)):
+            # fallback: small diagonal
+            auxQ = np.zeros((2 * d, 2 * d))
+            for jj in range(d):
+                auxQ[jj, jj] = jitter
+        auxQ = 0.5 * (auxQ + auxQ.T)
+
+        # keep same shapes as original
+        temp_Q = np.tril(auxQ[:d, :d]) + np.tril(auxQ[:d, :d], -1).T
+        Q = np.hstack((temp_Q, np.zeros((d, d))))
+        Q = np.vstack((Q, np.zeros((d, 2 * d))))
+
+        Fgiu = np.hstack((Id, np.zeros((d, d))))
+        F = np.vstack((Ftilde, Fgiu))
+
+        # update R diag
+        denom2 = float((T - burnIn + 1))
+        if denom2 == 0.0:
+            denom2 = 1.0
+        # temp_diag_R = np.diag(eps_smooth / denom2)
+
+        # temp_diag_R might be a full matrix if eps_smooth/... gives matrix; extract diagonal safely
+        # temp_diag_vec = np.zeros(d)
+        # for jj in range(d):
+        #     val = temp_diag_R[jj, jj] if np.isfinite(temp_diag_R[jj, jj]) else 0.0
+        #     if val == 0.0:
+        #         val = 1.0
+        #     temp_diag_vec[jj] = val
+        
+        # Compute diagonal vector safely
+        temp_diag_vec = np.zeros(d)
+        eps_diag = np.diag(eps_smooth / denom2)  # this is 1D now
+        for jj in range(d):
+            val = eps_diag[jj] if np.isfinite(eps_diag[jj]) and eps_diag[jj] != 0.0 else 1.0
+            temp_diag_vec[jj] = val
+        
+        # Build final diagonal matrix
+        R = np.diag(temp_diag_vec)
+        
+        # R = np.diag(temp_diag_vec)
+
+        # final sanitize Q/R
+        _sanitize_square(Q[:d, :d])
+        _sanitize_square(R)
+
+        if l_old <= eps:
+            break
+
+    return F, R, Q, att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, vt, Ft, loglike
+
+
+@njit
+def Fast_LeadLagllem_numba(y, Q_init, R_init, F_init, C, maxiter=3000, eps=1e-4):
+    """
+    Numba-compatible EM for Lead-Lag state-space model.
+    Dimensions and math identical to original LeadLagllem.
+    Adds defensive checks and jitter to avoid NaNs/Infs.
+    """
+
+    # Ensure float64 copies
+    Q = Q_init.astype(np.float64).copy()
+    R = R_init.astype(np.float64).copy()
+    F = F_init.astype(np.float64).copy()
+    y = y.astype(np.float64).copy()
+
+    T, d = y.shape
+    Id = np.eye(d)
+    P = np.hstack((Id, np.zeros((d, d))))
+    burnIn = d + 10
+    jitter = 1e-12
+
+    l_old = 1e10
+
+    # Helper: sanitize a matrix in-place
+    def sanitize_square(mat):
+        for i in range(mat.shape[0]):
+            for j in range(mat.shape[1]):
+                if not np.isfinite(mat[i, j]):
+                    mat[i, j] = 0.0
+            mat[i, i] += jitter  # add tiny jitter on diagonal
+
+    # Initial sanitize
+    sanitize_square(Q[:d, :d])
+    sanitize_square(R)
+
+    # EM loop
+    for it in range(maxiter):
+        S = np.zeros((2*d, 2*d))
+        S10 = np.zeros((2*d, 2*d))
+        eps_smooth = np.zeros((d, d))
+
+        # === Call KF / Smoother ===
+        att, Ptt, at, Pt, vt, Ft, Kt, loglike = FastLeadLagKF(y, C, F, R, Q, burnIn)
+        x_smooth, V_smooth, Vt_smooth = FastLeadLagSmoothing(y, C, F, att, Ptt, Pt, vt, Ft, Kt)
+
+        # Sanitize smoother outputs
+        for t in range(T):
+            for i in range(2*d):
+                if not np.isfinite(x_smooth[t, i]):
+                    x_smooth[t, i] = 0.0
+            for i in range(2*d):
+                for j in range(2*d):
+                    if not np.isfinite(V_smooth[t][i, j]):
+                        V_smooth[t][i, j] = 0.0
+
+        # === Accumulate S, S10, eps_smooth ===
+        for t in range(burnIn, T):
+            # Handle missing data
+            has_nan = False
+            for j in range(d):
+                if np.isnan(y[t, j]):
+                    has_nan = True
+                    break
+
+            if has_nan:
+                # Build y1 with available entries
+                y1 = np.zeros((d, 1))
+                auxC = np.zeros((d, 2*d))
+                R2 = np.zeros((d, d))
+                for j in range(d):
+                    if not np.isnan(y[t, j]):
+                        y1[j, 0] = y[t, j]
+                        for k in range(2*d):
+                            auxC[j, k] = C[j, k]
+                        R2[j, j] = 0.0
+
+                x = x_smooth[t, :].reshape((2*d, 1))
+                x1 = x_smooth[t-1, :].reshape((2*d, 1))
+
+                S += x @ x.T + V_smooth[t]
+                S10 += x1 @ x1.T + Vt_smooth[t]
+                eps_smooth += (y1 - auxC @ x) @ (y1 - auxC @ x).T + auxC @ V_smooth[t] @ auxC.T + R2
+            else:
+                x = x_smooth[t, :].reshape((2*d, 1))
+                x1 = x_smooth[t-1, :].reshape((2*d, 1))
+                S += x @ x.T + V_smooth[t]
+                S10 += x1 @ x1.T + Vt_smooth[t]
+                y_t = y[t, :].reshape((d, 1))
+                eps_smooth += (y_t - C @ x) @ (y_t - C @ x).T + C @ V_smooth[t] @ C.T
+
+        # === Update F, Q, R ===
+        x = x_smooth[T-2, :].reshape((2*d, 1))
+        x1 = x_smooth[burnIn-1, :].reshape((2*d, 1))
+
+        S00 = S - x @ x.T - V_smooth[T-1] + x1 @ x1.T + V_smooth[burnIn-1]
+        S11 = S.copy()
+        BB = S10.copy()
+        AA = S00.copy()
+        CC = S11.copy()
+
+        BB1 = BB[0:d, 0:d]
+        BB2 = BB[0:d, d:]
+        BBtilde = np.hstack((BB1, BB2))
+
+        AA11 = AA[0:d, 0:d]
+        AA12 = AA[0:d, d:]
+        AA21 = AA[d:, 0:d]
+        AA22 = AA[d:, d:]
+
+        Gamma = BB1 - BB2 - AA11 + AA12
+        Theta = AA11 + AA22 - AA12 - AA21
+
+        sanitize_square(Theta)
+        invTheta = np.linalg.inv(Theta)
+
+        auxF = Gamma @ invTheta
+        Ftilde = np.hstack((Id + auxF, -auxF))
+
+        auxQ = P @ CC @ P.T - BBtilde @ Ftilde.T - Ftilde @ BBtilde.T + Ftilde @ AA @ Ftilde.T
+        auxQ /= float(T - burnIn + 1.0)
+        auxQ = 0.5*(auxQ + auxQ.T)  # symmetrize
+        Q = np.vstack((np.hstack((auxQ[:d, :d], np.zeros((d,d)))), np.zeros((d, 2*d))))
+
+        Fgiu = np.hstack((Id, np.zeros((d, d))))
+        F = np.vstack((Ftilde, Fgiu))
+
+        # Update R
+        temp_diag = np.zeros(d)
+        eps_smooth_diag = np.diag(eps_smooth / float(T - burnIn + 1.0))
+        for j in range(d):
+            val = eps_smooth_diag[j]
+            if not np.isfinite(val) or val == 0.0:
+                val = 1.0
+            temp_diag[j] = val
+        R = np.diag(temp_diag)
+
+        sanitize_square(Q[:d, :d])
+        sanitize_square(R)
+
+        if l_old <= eps:
+            break
+        l_old = abs(l_old - loglike)
+
+    return F, R, Q, att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, vt, Ft, loglike
+
 
 ######### VAR(1) model
 
@@ -1251,3 +1660,322 @@ def VAR1_em_fit(A0, H0, Q0, yt, maxiter=200, tol=10**-6):
     
     # return att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, vt, Ft, A, H, Q 
     return att, Ptt, at, Pt, x_smooth, V_smooth, Vt_smooth, loglike, vt, Ft, Kt, A, H, Q
+
+
+######## Fitting functions for the Random Walk model with drift 
+
+def RW_kalman_filter(yt, drift, H, Q, burnIn = 0):
+    # Kalman filetr for mutivariate random walk with drift
+    n_var = len(yt[0]) # number of variables
+    N = len(yt)
+    
+    A = np.eye(n_var)
+    Z = np.eye(n_var)
+    
+    Pt = np.empty((N, n_var, n_var))
+    Pt[0] = np.eye(len(Q))
+    
+    F0 = Z @ Pt[0] @ Z.T + H # Initial valuea of the first innovartion variance
+    n_rows, n_cols = np.shape(F0)
+    
+    Ft = np.empty((N, n_rows, n_cols))
+    Ft[0] = F0
+    
+    
+    # Ptt = [] # filtered estimator of the variance of the unobserved process
+    # Ptt0 = Pt[0] - Pt[0] @ Z.T @ inv(Ft[0]) @ Z @ Pt[0]
+    ZP = Z @ Pt[0]
+    Ptt0 = Pt[0] - Pt[0] @ Z.T @ np.linalg.solve(Ft[0], ZP)
+    n_rows, n_cols = np.shape(Ptt0)
+    
+    Ptt = np.empty((N, n_rows, n_cols))
+    Ptt[0] = Ptt0
+    
+    # Kalman gain part
+    # K0 = A @ Pt[0] @ Z.T @ inv(Ft[0]) # initial value of the Kalman gain
+    tmp = A @ Pt[0] @ Z.T
+    K0 = np.linalg.solve(Ft[0].T, tmp.T).T
+    n_rows, n_cols = np.shape(K0)
+    
+    Kt = np.empty((N, n_rows, n_cols))
+    Kt[0] = K0
+    
+    # Allocating the memory for at, att, vt
+    
+    a0 = copy(yt[0,:]) # initial value for the conditional mean of the unobserved process
+    a0 = np.reshape(a0, (1, n_var))
+    at = np.empty((N, n_var)) # Conditional mean of the unobserved process
+    at[0] = a0
+    
+    vt = np.empty((N, n_var)) # innovation error
+    vt0 = yt[0] - a0  # initial value of the innovation error
+    
+    nan_index = np.isnan(vt0)
+    
+    if True in nan_index:
+        
+        vt0[nan_index]=0
+    
+    vt[0] = vt0
+    
+    att = np.empty((N, n_var)) # filtered estimator of the unobserved process
+    # att[0,:] = at[0] + Pt[0] @ Z @ inv(Ft[0]) @ vt[0] # computing the initial value of the filtered estimator of the unobserved process
+    tmp = Pt[0] @ Z.T
+    att[0, :] = at[0] + tmp @ np.linalg.solve(Ft[0], vt[0])
+    
+    for i in np.arange(1, N):
+        
+        nan_index = np.isnan(yt[i])
+        
+        if True in nan_index:
+            
+            y = deepcopy(yt[i])
+            y[nan_index] = 0
+            
+            Z = deepcopy(Z)
+            
+            for j in range(0, len(Z)):
+                
+                Z[nan_index] = 0
+                
+            try:
+                m = np.mean(Pt[i-1]-Pt[i-2])
+                if abs(m)<10**(-3):
+                    Pt[i] = copy(Pt[i-1])
+                else:
+                    Pt[i] = (A @ Ptt[i-1] @ A.T + Q) # Computing the variance
+            except:
+                pass
+            
+            # Pt[i] = (A @ Ptt[i-1] @ A.T + Q) # Computing the variance
+            
+            auxH = np.eye(len(H))
+            auxH[~nan_index] = H[~nan_index]
+            
+            Ft[i] = (Z @ Pt[i] @ Z.T + auxH) # computing the variance of the innovation error
+            # Ft[i] = (Z@Pt[i]@np.transpose(Z) + H) # computing the variance of the innovation error
+            
+            F = inv(Ft[i])
+                            
+            Ptt[i] = (Pt[i] - Pt[i] @ Z.T @ F @ Z @Pt[i]) # computing the filtered variance
+            
+            at[i] = A @ att[i-1] + drift
+            vt[i] = y - Z @ at[i] 
+            
+            att[i] = (at[i] + Pt[i] @ Z.T @ F @ np.transpose(vt[i])) 
+            
+            Kt[i] = A @ Pt[i] @ Z.T @ F # Kalman gain
+            
+        else:
+            
+            try:
+                m = np.mean(Pt[i-1]-Pt[i-2])
+                if abs(m)<10**(-3) and i>2:
+                    Pt[i] = copy(Pt[i-1])
+                    # Ft[i] = A @ Pt[i] @ A.T + H
+                else:
+                    Pt[i] = (A @ Ptt[i-1] @ A.T + Q) # Computing the variance
+                    # Ft[i] = (Z @ Pt[i] @ Z.T + H) # computing the variance of the innovation error
+            except:
+                pass
+        
+            # Pt[i] = (A @ Ptt[i-1] @ A.T + Q) # Computing the variance
+            
+            Ft[i] = (Z @ Pt[i] @ Z.T + H) # computing the variance of the innovation error
+          
+            # F = inv(Ft[i])
+            
+            # Ptt[i] = (Pt[i] - Pt[i] @ Z.T @ F @ Z @ Pt[i]) # computing the filtered variance
+            
+            tmp = Pt[i] @ Z.T
+            sol = np.linalg.solve(Ft[i], Z @ Pt[i])
+            Ptt[i] = Pt[i] - tmp @ sol
+            
+            at[i] = A @ att[i-1] + drift
+            vt[i] = yt[i] - Z @ at[i] 
+            
+            # att[i] = (at[i] + Pt[i] @ Z.T @ np.linalg.inv(Ft[i]) @ np.transpose(vt[i])) 
+            # Solve Ft[i] * x = vt[i].T
+            tmp = np.linalg.solve(Ft[i], vt[i].T)
+            
+            # Then multiply
+            att[i] = at[i] + Pt[i] @ Z.T @ tmp
+            
+            # Kt[i] = A @ Pt[i] @ Z.T @ np.linalg.inv(Ft[i]) # Kalman gain 
+            tmp = Z @ Pt[i].T @ A.T
+            Kt[i] = np.linalg.solve(Ft[i], tmp.T).T
+    
+    loglike = 0
+    n_var = len(yt[0])
+    
+    for i in range(burnIn, len(vt)):
+        
+        loglike += multivariate_gaussian_log_likelihood(vt[i], np.zeros(n_var), Ft[i])
+    
+    return att, Ptt, at, Pt, vt, Ft, Kt, loglike
+
+
+@njit
+def FastRW_kalman_filter(yt, drift, H, Q, burnIn=0):
+    # Numba compatible Kalman filetr for mutivariate random walk with drift
+    n_var = yt.shape[1]
+    N = yt.shape[0]
+    
+    A = np.eye(n_var)
+    Z = np.eye(n_var)
+    
+    yt = yt.astype(np.float64)
+    A = A.astype(np.float64) 
+    Z = Z.astype(np.float64)
+    H = H.astype(np.float64)
+    Q = Q.astype(np.float64)
+    drift = drift.astype(np.float64)
+    
+    Pt = np.zeros((N, n_var, n_var))
+    Pt[0] = np.eye(len(Q))
+    
+    F0 = Z @ Pt[0] @ np.transpose(Z) + H
+    Ft = np.zeros((N, F0.shape[0], F0.shape[1]))
+    Ft[0] = F0
+    
+    # Initial filtered covariance
+    ZP = Z @ Pt[0]
+    Ptt0 = Pt[0] - Pt[0] @ np.transpose(Z) @ np.linalg.solve(Ft[0], ZP)
+    Ptt = np.zeros((N, Ptt0.shape[0], Ptt0.shape[1]))
+    Ptt[0] = Ptt0
+    
+    # Initial Kalman gain
+    tmp = A @ Pt[0] @ np.transpose(Z)
+    K0 = np.linalg.solve(Ft[0].T, tmp.T).T
+    Kt = np.zeros((N, K0.shape[0], K0.shape[1]))
+    Kt[0] = K0
+    
+    at = np.zeros((N, n_var))
+    att = np.zeros((N, n_var))
+    vt = np.zeros((N, n_var))
+    
+    a0 = yt[0]
+    at[0] = a0
+    
+    vt0 = yt[0] - a0
+    for j in range(n_var):
+        if np.isnan(vt0[j]):
+            vt0[j] = 0.0
+    vt[0] = vt0
+    
+    tmp0 = Pt[0] @ np.transpose(Z)
+    att[0] = at[0] + tmp0 @ np.linalg.solve(Ft[0], vt[0])
+    
+    for i in range(1, N):
+        nan_index = np.isnan(yt[i])
+    
+        if np.any(nan_index):
+            y = np.copy(yt[i])
+            for j in range(n_var):
+                if nan_index[j]:
+                    y[j] = 0.0
+    
+            Z_mod = np.copy(Z)
+            for j in range(Z.shape[0]):
+                for k in range(Z.shape[1]):
+                    if nan_index[j]:
+                        Z_mod[j, k] = 0.0
+    
+            if i >= 2:
+                m = np.mean(Pt[i-1] - Pt[i-2])
+                if abs(m) < 1e-3:
+                    Pt[i] = Pt[i-1]
+                else:
+                    Pt[i] = A @ Ptt[i-1] @ A.T + Q
+            else:
+                Pt[i] = A @ Ptt[i-1] @ A.T + Q
+    
+            auxH = np.eye(H.shape[0])
+            for j in range(H.shape[0]):
+                if not nan_index[j]:
+                    auxH[j, j] = H[j, j]
+    
+            Ft[i] = Z_mod @ Pt[i] @ np.transpose(Z_mod) + auxH
+    
+            sol = np.linalg.solve(Ft[i], Z_mod @ Pt[i])
+            Ptt[i] = Pt[i] - Pt[i] @ np.transpose(Z_mod) @ sol
+    
+            at[i] = A @ att[i-1]
+            vt[i] = y - Z_mod @ at[i]
+            att[i] = at[i] + Pt[i] @ np.transpose(Z_mod) @ np.linalg.solve(Ft[i], vt[i])
+    
+            tmp = Z_mod @ Pt[i].T @ A.T
+            Kt[i] = np.linalg.solve(Ft[i], tmp.T).T
+    
+        else:
+            if i >= 2:
+                m = np.mean(Pt[i-1] - Pt[i-2])
+                if abs(m) < 1e-3:
+                    Pt[i] = Pt[i-1]
+                else:
+                    Pt[i] = A @ Ptt[i-1] @ A.T + Q
+            else:
+                Pt[i] = A @ Ptt[i-1] @ A.T + Q
+    
+            Ft[i] = Z @ Pt[i] @ np.transpose(Z) + H
+    
+            sol = np.linalg.solve(Ft[i], Z @ Pt[i])
+            Ptt[i] = Pt[i] - Pt[i] @ np.transpose(Z) @ sol
+    
+            at[i] = A @ att[i-1]
+            vt[i] = yt[i] - Z @ at[i]
+            att[i] = at[i] + Pt[i] @ np.transpose(Z) @ np.linalg.solve(Ft[i], vt[i])
+    
+            tmp = Z @ Pt[i].T @ A.T
+            Kt[i] = np.linalg.solve(Ft[i], tmp.T).T
+    
+    loglike = 0.0
+    for i in range(burnIn, N):
+        loglike += Fast_multivariate_gaussian_log_likelihood(vt[i], np.zeros(n_var), Ft[i])
+    
+    return att, Ptt, at, Pt, vt, Ft, Kt, loglike
+
+
+def RW_obj_fun(params, yt, burnIn=0):
+    
+    n_var = len(yt[0])
+    # n_corr = int(factorial(n_var)/(2*factorial(n_var-2)))
+    
+    drift = params[:n_var]
+    H_sigmas = np.exp(params[n_var : n_var + n_var])
+    Q_sigmas = np.exp(params[n_var + n_var : n_var * 3])
+    Q_rhos = sigmoid_like_fun(params[n_var * 3 :])
+    
+    # A = np.reshape(autoreg_par, (n_var, n_var))
+    
+    H = np.diag(H_sigmas)
+    Q_params = np.hstack((Q_sigmas, Q_rhos))
+    
+    Q = matrix_generator(Q_params.flatten(), n_var)
+    
+    att, Ptt, at, Pt, vt, Ft, Kt, loglike = FastRW_kalman_filter(yt, drift, H, Q, burnIn)
+    
+    return -loglike 
+
+
+def RW_ml_fit(params, yt, burnIn=0):
+    
+    n_var = len(yt[0])    
+    
+    res = minimize(RW_obj_fun, params, args=(yt, burnIn), method='BFGS')
+    
+    fitted_par = res.x 
+    drift = fitted_par[:n_var]
+    
+    H_sigmas = np.exp(fitted_par[n_var : n_var + n_var])
+    Q_sigmas = np.exp(fitted_par[n_var + n_var : n_var * 3])
+    Q_rhos = sigmoid_like_fun(fitted_par[n_var * 3 :])
+    
+    # A = np.reshape(autoreg_par, (n_var, n_var))
+    
+    H = np.diag(H_sigmas)
+    Q_params = np.hstack((Q_sigmas, Q_rhos))
+    
+    Q = matrix_generator(Q_params.flatten(), n_var)
+    
+    return drift, H, Q
