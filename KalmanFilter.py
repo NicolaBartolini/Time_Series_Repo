@@ -290,6 +290,114 @@ def LeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0):
     
     return att, Ptt, at, Pt, vt, Ft, Kt, loglike 
 
+
+def LeadLagKF2(y, Q, R, T_t, Z_t, jitter=1e-8, verbose=False):
+    """
+    Lead-Lag Kalman Filter (robust + MATLAB-faithful version)
+    with explicit D-matrix handling of missing data.
+
+    INPUTS:
+      y : (T, d) array, observed data (NaN for missing)
+      Q : (2d, 2d) innovation covariance
+      R : (d, d) observation covariance
+      F : (2d, 2d) state transition matrix
+      C : (d, 2d) observation matrix
+      jitter : float, small diagonal regularization for singular F_t
+      verbose : bool, print regularization warnings
+
+    OUTPUTS:
+      at  : predicted states  (T, 2d)
+      att : filtered states   (T, 2d)
+      Pt  : predicted covariances (T, 2d, 2d)
+      Ptt : filtered covariances  (T, 2d, 2d)
+      vt  : innovations (T, d)
+      Ft  : innovation covariances (T, d, d)
+      loglik : per-step log-likelihoods
+    """
+    F = T_t
+    C = Z_t
+    
+    T, d = y.shape
+    dx = 2 * d
+    Id = np.eye(d)
+
+    # Allocate arrays
+    at = np.zeros((T, dx))
+    att = np.zeros((T, dx))
+    Pt = np.zeros((T, dx, dx))
+    Ptt = np.zeros((T, dx, dx))
+    vt = np.zeros((T, d))
+    Ft = np.zeros((T, d, d))
+    Kt = np.zeros((T, dx, d))
+    loglik = np.zeros(T)
+
+    # Handle missing data mask
+    a = ~np.isnan(y)
+    y_filled = np.where(np.isnan(y), 0, y)
+
+    # Initialization (diffuse)
+    at[0, :] = np.tile(y_filled[0, :], 2)
+    Pt[0, :, :] = np.eye(dx)
+
+    # Main filtering loop
+    for t in range(T):
+        # --- D matrix for missing-data handling ---
+        D = np.vstack([
+            Id[a[t, :], :],
+            np.zeros((np.count_nonzero(~a[t, :]), d))
+        ])
+
+        auxY = D @ y_filled[t, :]
+        auxC = D @ C
+        auxR = D @ R @ D.T
+        diag_auxR = np.diag(auxR)
+        auxR[np.where(diag_auxR == 0), np.where(diag_auxR == 0)] = 1.0
+
+        # --- Prediction step ---
+        if t > 0:
+            at[t, :] = F @ att[t - 1, :]
+            Pt[t, :, :] = F @ Ptt[t - 1, :, :] @ F.T + Q
+
+        # --- Innovation ---
+        F_t = auxC @ Pt[t, :, :] @ auxC.T + auxR
+        F_t = (F_t + F_t.T) / 2  # symmetrize
+
+        cond_F = np.linalg.cond(F_t)
+        if np.isnan(cond_F) or cond_F > 1e12:
+            if verbose:
+                print(f"⚠️ Regularizing F_t at t={t}, cond={cond_F:.2e}")
+            F_t += np.eye(F_t.shape[0]) * jitter
+
+        # --- Kalman gain (stable solve) ---
+        try:
+            K_t = np.linalg.solve(F_t.T, (Pt[t, :, :] @ auxC.T).T).T
+        except np.linalg.LinAlgError:
+            if verbose:
+                print(f"⚠️ Singular F_t at t={t}, adding jitter {jitter}")
+            F_t += np.eye(F_t.shape[0]) * jitter
+            K_t = np.linalg.solve(F_t.T, (Pt[t, :, :] @ auxC.T).T).T
+
+        Kt[t, :, :auxC.shape[0]] = K_t
+
+        # --- Update step ---
+        v_t = auxY - auxC @ at[t, :]
+        att[t, :] = at[t, :] + K_t @ v_t
+        Ptt[t, :, :] = Pt[t, :, :] - K_t @ auxC @ Pt[t, :, :]
+        Ptt[t, :, :] = (Ptt[t, :, :] + Ptt[t, :, :].T) / 2  # enforce symmetry
+
+        vt[t, :len(v_t)] = v_t
+        Ft[t, :auxC.shape[0], :auxC.shape[0]] = F_t
+
+        # --- Log-likelihood ---
+        try:
+            sign, logdet = np.linalg.slogdet(F_t)
+            loglik[t] = -0.5 * (logdet + v_t.T @ np.linalg.solve(F_t, v_t))
+        except np.linalg.LinAlgError:
+            loglik[t] = np.nan
+
+    return at, att, Pt, Ptt, vt, Ft, Kt, np.sum(loglik)
+
+
 # Filtering function for the Lead-Lag model optimized for numba
 @njit
 def FastLeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0, Lasso=False, lambda_=.5, Ridge=False, lambda2_=.5):
@@ -405,16 +513,21 @@ def LeadLagSmoothing(Y, Z_t, T_t, att, Ptt, Pt, vt, Ft, Kt):
 
     # smoothing
     
-    x_smooth = np.empty(np.shape(att))
+    x_smooth = np.zeros_like(att)
+    V_smooth = np.zeros_like(Ptt)
+    Vt_smooth = np.zeros_like(Ptt)
+    Jtn = np.zeros_like(Ptt)
+    
+    # x_smooth = np.empty(np.shape(att))
     x_smooth[-1] = att[-1]
     
     Jtn_0 = Ptt[-1]@ np.transpose(T_t) @np.linalg.inv(Pt[-1])
     
     N = len(Y)
-    M = np.shape(Jtn_0)[0] 
-    K = np.shape(Jtn_0)[1]
+    # M = np.shape(Jtn_0)[0] 
+    # K = np.shape(Jtn_0)[1]
     
-    Jtn = np.empty((N-1, M, K))
+    # Jtn = np.empty((N-1, M, K))
     Jtn[-1] = Jtn_0
     
     x_smooth[-2]= att[-2]+Jtn[-1]@(x_smooth[-1]-T_t@att[-2])
@@ -422,10 +535,10 @@ def LeadLagSmoothing(Y, Z_t, T_t, att, Ptt, Pt, vt, Ft, Kt):
     # The aoutocorrelation = Vt_smooth
     Vt_smooth_n = (np.eye(len(att[0])) - Kt[-1]@Z_t) @ T_t @ Ptt[-2]
     
-    M = np.shape(Vt_smooth_n)[0] 
-    K = np.shape(Vt_smooth_n)[1]
+    # M = np.shape(Vt_smooth_n)[0] 
+    # K = np.shape(Vt_smooth_n)[1]
     
-    Vt_smooth = np.empty((N,M,K))
+    # Vt_smooth = np.empty((N,M,K))
     Vt_smooth[-1] = Vt_smooth_n
     
     # Vt
@@ -433,10 +546,10 @@ def LeadLagSmoothing(Y, Z_t, T_t, att, Ptt, Pt, vt, Ft, Kt):
     V_smooth_n = Ptt[-1]
     V_smooth_n1 = Ptt[-2] + Jtn[-1]@(V_smooth_n - Pt[-1])@Jtn[-1]
     
-    M = np.shape(V_smooth_n)[0] 
-    K = np.shape(V_smooth_n)[1]
+    # M = np.shape(V_smooth_n)[0] 
+    # K = np.shape(V_smooth_n)[1]
     
-    V_smooth = np.empty((N,M,K))
+    # V_smooth = np.empty((N,M,K))
     V_smooth[-1] = V_smooth_n
     V_smooth[-2] = V_smooth_n1
     
@@ -618,7 +731,7 @@ def LeadLagMLfit(params, yt, n_var, model=1, burnIn=10, K=None, Lasso=False, lam
         if K==None:
             leadlag_par = fitted_params[:n_var*n_var]
         elif K==-1:
-            leadlag_par = 1/np.sqrt(2*pi) * np.exp(.5*fitted_params[:n_var*n_var]**2)
+            leadlag_par = 1/np.sqrt(2*pi) * np.exp(-.5*fitted_params[:n_var*n_var]**2)
         else:
             leadlag_par = K * 2/pi * np.arctan(fitted_params[:n_var*n_var])
                         
@@ -705,7 +818,8 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
         S10 = np.zeros((2*d, 2*d))
         eps_smooth = np.zeros((d, d))
                 
-        att, Ptt, at, Pt, vt, Ft, Kt, loglike = LeadLagKF(y, C, F, R, Q, burnIn)
+        # att, Ptt, at, Pt, vt, Ft, Kt, loglike = LeadLagKF(y, C, F, R, Q, burnIn)
+        at, att, Pt, Ptt, vt, Ft, Kt, loglike = LeadLagKF2(y, Q, R, F, C, 1e-8, False)
         x_smooth, V_smooth, Vt_smooth = LeadLagSmoothing(y, C, F, att, Ptt, Pt, vt, Ft, Kt)
         
         for t in range(burnIn, T):
