@@ -525,8 +525,15 @@ def LeadLagObjFun(params, yt, burnIn=10, K=None, Lasso=False, lambda_ = .5, Ridg
     
     if K==None:
         leadlag_par = params[:n_var*n_var]
+    elif K==-1:
+        leadlag_par = 1/np.sqrt(2*pi) * np.exp(-.5*params[:n_var*n_var]**2)
     else:
         leadlag_par = K * 2/pi * np.arctan(params[:n_var*n_var])
+        
+        for i in range(0, n_var*n_var, n_var+1):
+            leadlag_par[i] = 1/np.sqrt(2*pi) * np.exp(-.5*params[i]**2)
+        
+        # leadlag_par[-1] = 1/np.sqrt(2*pi) * np.exp(.5*params[:n_var*n_var]**2)
     
     H_sigmas = np.exp(params[n_var*n_var : n_var*n_var + n_var])
     Q_sigmas = np.exp(params[n_var*n_var + n_var : n_var*n_var + n_var*2])
@@ -567,6 +574,8 @@ def LeadLagObjFun2(params, yt, burnIn=10, K=None, Lasso=False, lambda_ = .5, Rid
     
     if K==None:
         leadlag_par = params[:n_var]
+    elif K==-1:
+        leadlag_par = 1/np.sqrt(2*pi) * np.exp(-.5*params[:n_var]**2)
     else:
         leadlag_par = K * 2/pi * np.arctan(params[:n_var] )
     
@@ -606,7 +615,16 @@ def LeadLagMLfit(params, yt, n_var, model=1, burnIn=10, K=None, Lasso=False, lam
         
         fitted_params = res.x 
         
-        leadlag_par = fitted_params[:n_var*n_var]
+        if K==None:
+            leadlag_par = fitted_params[:n_var*n_var]
+        elif K==-1:
+            leadlag_par = 1/np.sqrt(2*pi) * np.exp(.5*fitted_params[:n_var*n_var]**2)
+        else:
+            leadlag_par = K * 2/pi * np.arctan(fitted_params[:n_var*n_var])
+                        
+            for i in range(0, n_var*n_var, n_var+1):
+                leadlag_par[i] = 1/np.sqrt(2*pi) * np.exp(-.5*fitted_params[i]**2)
+            
         H_sigmas = np.exp(fitted_params[n_var*n_var : n_var*n_var + n_var])
         Q_sigmas = np.exp(fitted_params[n_var*n_var + n_var : n_var*n_var + n_var*2])
         Q_rhos = sigmoid_like_fun(fitted_params[n_var*n_var + n_var*2 : ])
@@ -620,7 +638,15 @@ def LeadLagMLfit(params, yt, n_var, model=1, burnIn=10, K=None, Lasso=False, lam
         
         fitted_params = res.x 
         
-        leadlag_par = fitted_params[:n_var]
+        # leadlag_par = fitted_params[:n_var]
+        
+        if K==None:
+            leadlag_par = fitted_params[:n_var]
+        elif K==-1:
+            leadlag_par = 1/np.sqrt(2*pi) * np.exp(.5*fitted_params[:n_var]**2)
+        else:
+            leadlag_par = K * 2/pi * np.arctan(fitted_params[:n_var])
+        
         H_sigmas = np.exp(fitted_params[n_var : n_var + n_var])
         Q_sigmas = np.exp(fitted_params[n_var + n_var : n_var*n_var + n_var*2])
         Q_rhos = sigmoid_like_fun(fitted_params[n_var + n_var*2 : ])
