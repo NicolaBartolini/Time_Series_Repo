@@ -230,7 +230,7 @@ def LeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0):
             except:
                 pass
             
-            # Pt[i] = (T_t@Ptt[i-1]@np.transpose(T_t) + Qt) # Computing the variance
+            # Pt[i] = (T_t@Ptt[i-1]@np.transpose(T_t) + Qt) # Computing the innovation variance
             
             auxH = np.eye(len(Ht))
             auxH[~nan_index] = Ht[~nan_index]
@@ -291,111 +291,109 @@ def LeadLagKF(Y, Z_t, T_t, Ht, Qt, burnIn=0):
     return att, Ptt, at, Pt, vt, Ft, Kt, loglike 
 
 
-def LeadLagKF2(y, Q, R, T_t, Z_t, jitter=1e-8, verbose=False):
-    """
-    Lead-Lag Kalman Filter (robust + MATLAB-faithful version)
-    with explicit D-matrix handling of missing data.
-
-    INPUTS:
-      y : (T, d) array, observed data (NaN for missing)
-      Q : (2d, 2d) innovation covariance
-      R : (d, d) observation covariance
-      F : (2d, 2d) state transition matrix
-      C : (d, 2d) observation matrix
-      jitter : float, small diagonal regularization for singular F_t
-      verbose : bool, print regularization warnings
-
-    OUTPUTS:
-      at  : predicted states  (T, 2d)
-      att : filtered states   (T, 2d)
-      Pt  : predicted covariances (T, 2d, 2d)
-      Ptt : filtered covariances  (T, 2d, 2d)
-      vt  : innovations (T, d)
-      Ft  : innovation covariances (T, d, d)
-      loglik : per-step log-likelihoods
-    """
-    F = T_t
-    C = Z_t
+# def LeadLagKF2(y, Q, R, T_t, Z_t, jitter=1e-8, verbose=False):
     
-    T, d = y.shape
-    dx = 2 * d
-    Id = np.eye(d)
+#     """
+#     INPUTS:
+#       y : (T, d) array, observed data (NaN for missing)
+#       Q : (2d, 2d) innovation covariance
+#       R : (d, d) observation covariance
+#       F : (2d, 2d) state transition matrix
+#       C : (d, 2d) observation matrix
+#       jitter : float, small diagonal regularization for singular F_t
+#       verbose : bool, print regularization warnings
 
-    # Allocate arrays
-    at = np.zeros((T, dx))
-    att = np.zeros((T, dx))
-    Pt = np.zeros((T, dx, dx))
-    Ptt = np.zeros((T, dx, dx))
-    vt = np.zeros((T, d))
-    Ft = np.zeros((T, d, d))
-    Kt = np.zeros((T, dx, d))
-    loglik = np.zeros(T)
+#     OUTPUTS:
+#       at  : predicted states  (T, 2d)
+#       att : filtered states   (T, 2d)
+#       Pt  : predicted covariances (T, 2d, 2d)
+#       Ptt : filtered covariances  (T, 2d, 2d)
+#       vt  : innovations (T, d)
+#       Ft  : innovation covariances (T, d, d)
+#       loglik : per-step log-likelihoods
+#     """
+#     F = T_t
+#     C = Z_t
+    
+#     T, d = y.shape
+#     dx = 2 * d
+#     Id = np.eye(d)
 
-    # Handle missing data mask
-    a = ~np.isnan(y)
-    y_filled = np.where(np.isnan(y), 0, y)
+#     # Allocate arrays
+#     at = np.zeros((T, dx))
+#     att = np.zeros((T, dx))
+#     Pt = np.zeros((T, dx, dx))
+#     Ptt = np.zeros((T, dx, dx))
+#     vt = np.zeros((T, d))
+#     Ft = np.zeros((T, d, d))
+#     Kt = np.zeros((T, dx, d))
+#     loglik = np.zeros(T)
 
-    # Initialization (diffuse)
-    at[0, :] = np.tile(y_filled[0, :], 2)
-    Pt[0, :, :] = np.eye(dx)
+#     # Handle missing data mask
+#     a = ~np.isnan(y)
+#     y_filled = np.where(np.isnan(y), 0, y)
 
-    # Main filtering loop
-    for t in range(T):
-        # --- D matrix for missing-data handling ---
-        D = np.vstack([
-            Id[a[t, :], :],
-            np.zeros((np.count_nonzero(~a[t, :]), d))
-        ])
+#     # Initialization (diffuse)
+#     at[0, :] = np.tile(y_filled[0, :], 2)
+#     Pt[0, :, :] = np.eye(dx)
 
-        auxY = D @ y_filled[t, :]
-        auxC = D @ C
-        auxR = D @ R @ D.T
-        diag_auxR = np.diag(auxR)
-        auxR[np.where(diag_auxR == 0), np.where(diag_auxR == 0)] = 1.0
+#     # Main filtering loop
+#     for t in range(T):
+#         # --- D matrix for missing-data handling ---
+#         D = np.vstack([
+#             Id[a[t, :], :],
+#             np.zeros((np.count_nonzero(~a[t, :]), d))
+#         ])
 
-        # --- Prediction step ---
-        if t > 0:
-            at[t, :] = F @ att[t - 1, :]
-            Pt[t, :, :] = F @ Ptt[t - 1, :, :] @ F.T + Q
+#         auxY = D @ y_filled[t, :]
+#         auxC = D @ C
+#         auxR = D @ R @ D.T
+#         diag_auxR = np.diag(auxR)
+#         auxR[np.where(diag_auxR == 0), np.where(diag_auxR == 0)] = 1.0
 
-        # --- Innovation ---
-        F_t = auxC @ Pt[t, :, :] @ auxC.T + auxR
-        F_t = (F_t + F_t.T) / 2  # symmetrize
+#         # --- Prediction step ---
+#         if t > 0:
+#             at[t, :] = F @ att[t - 1, :]
+#             Pt[t, :, :] = F @ Ptt[t - 1, :, :] @ F.T + Q
 
-        cond_F = np.linalg.cond(F_t)
-        if np.isnan(cond_F) or cond_F > 1e12:
-            if verbose:
-                print(f"⚠️ Regularizing F_t at t={t}, cond={cond_F:.2e}")
-            F_t += np.eye(F_t.shape[0]) * jitter
+#         # --- Innovation ---
+#         F_t = auxC @ Pt[t, :, :] @ auxC.T + auxR
+#         F_t = (F_t + F_t.T) / 2  # symmetrize
 
-        # --- Kalman gain (stable solve) ---
-        try:
-            K_t = np.linalg.solve(F_t.T, (Pt[t, :, :] @ auxC.T).T).T
-        except np.linalg.LinAlgError:
-            if verbose:
-                print(f"⚠️ Singular F_t at t={t}, adding jitter {jitter}")
-            F_t += np.eye(F_t.shape[0]) * jitter
-            K_t = np.linalg.solve(F_t.T, (Pt[t, :, :] @ auxC.T).T).T
+#         cond_F = np.linalg.cond(F_t)
+#         if np.isnan(cond_F) or cond_F > 1e12:
+#             if verbose:
+#                 print(f"Regularizing F_t at t={t}, cond={cond_F:.2e}")
+#             F_t += np.eye(F_t.shape[0]) * jitter
 
-        Kt[t, :, :auxC.shape[0]] = K_t
+#         # --- Kalman gain (stable solve) ---
+#         try:
+#             K_t = np.linalg.solve(F_t.T, (Pt[t, :, :] @ auxC.T).T).T
+#         except np.linalg.LinAlgError:
+#             if verbose:
+#                 print(f"Singular F_t at t={t}, adding jitter {jitter}")
+#             F_t += np.eye(F_t.shape[0]) * jitter
+#             K_t = np.linalg.solve(F_t.T, (Pt[t, :, :] @ auxC.T).T).T
 
-        # --- Update step ---
-        v_t = auxY - auxC @ at[t, :]
-        att[t, :] = at[t, :] + K_t @ v_t
-        Ptt[t, :, :] = Pt[t, :, :] - K_t @ auxC @ Pt[t, :, :]
-        Ptt[t, :, :] = (Ptt[t, :, :] + Ptt[t, :, :].T) / 2  # enforce symmetry
+#         Kt[t, :, :auxC.shape[0]] = K_t
 
-        vt[t, :len(v_t)] = v_t
-        Ft[t, :auxC.shape[0], :auxC.shape[0]] = F_t
+#         # --- Update step ---
+#         v_t = auxY - auxC @ at[t, :]
+#         att[t, :] = at[t, :] + K_t @ v_t
+#         Ptt[t, :, :] = Pt[t, :, :] - K_t @ auxC @ Pt[t, :, :]
+#         Ptt[t, :, :] = (Ptt[t, :, :] + Ptt[t, :, :].T) / 2  # enforce symmetry
 
-        # --- Log-likelihood ---
-        try:
-            sign, logdet = np.linalg.slogdet(F_t)
-            loglik[t] = -0.5 * (logdet + v_t.T @ np.linalg.solve(F_t, v_t))
-        except np.linalg.LinAlgError:
-            loglik[t] = np.nan
+#         vt[t, :len(v_t)] = v_t
+#         Ft[t, :auxC.shape[0], :auxC.shape[0]] = F_t
 
-    return at, att, Pt, Ptt, vt, Ft, Kt, np.sum(loglik)
+#         # --- Log-likelihood ---
+#         try:
+#             sign, logdet = np.linalg.slogdet(F_t)
+#             loglik[t] = -0.5 * (logdet + v_t.T @ np.linalg.solve(F_t, v_t))
+#         except np.linalg.LinAlgError:
+#             loglik[t] = np.nan
+
+#     return at, att, Pt, Ptt, vt, Ft, Kt, np.sum(loglik)
 
 
 # Filtering function for the Lead-Lag model optimized for numba
@@ -679,11 +677,6 @@ def LeadLagObjFun(params, yt, burnIn=10, K=None, Lasso=False, lambda_ = .5, Ridg
 def LeadLagObjFun2(params, yt, burnIn=10, K=None, Lasso=False, lambda_ = .5, Ridge=False, lamda2_=.5):
     # This functionis for fitting the restricted model without cross lead-lag effects
     n_var = len(yt[0])
-    # n_corr = int(factorial(n_var)/(2*factorial(n_var-2)))
-    
-    # leadlag_par = params[:n_var] 
-    
-    # leadlag_par = K * 2/pi * np.arctan(params[:n_var] )
     
     if K==None:
         leadlag_par = params[:n_var]
@@ -807,8 +800,7 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
     burnIn = d + 10
     
     l = np.ones(maxiter+1)*(10**10)
-    # delta_log = np.ones(maxiter+1)*(10^10)
-    
+        
     l_old = 10**10
     
     ###
@@ -818,8 +810,8 @@ def LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=10**-4):
         S10 = np.zeros((2*d, 2*d))
         eps_smooth = np.zeros((d, d))
                 
-        # att, Ptt, at, Pt, vt, Ft, Kt, loglike = LeadLagKF(y, C, F, R, Q, burnIn)
-        at, att, Pt, Ptt, vt, Ft, Kt, loglike = LeadLagKF2(y, Q, R, F, C, 1e-8, False)
+        att, Ptt, at, Pt, vt, Ft, Kt, loglike = LeadLagKF(y, C, F, R, Q, burnIn)
+        # at, att, Pt, Ptt, vt, Ft, Kt, loglike = LeadLagKF2(y, Q, R, F, C, 1e-8, False)
         x_smooth, V_smooth, Vt_smooth = LeadLagSmoothing(y, C, F, att, Ptt, Pt, vt, Ft, Kt)
         
         for t in range(burnIn, T):
@@ -1121,8 +1113,6 @@ def Fast_LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=1e-4):
         # Build final diagonal matrix
         R = np.diag(temp_diag_vec)
         
-        # R = np.diag(temp_diag_vec)
-
         # final sanitize Q/R
         _sanitize_square(Q[:d, :d])
         _sanitize_square(R)
@@ -1135,11 +1125,9 @@ def Fast_LeadLagllem(y, Q_init, R_init, F_init, C, maxiter=3000, eps=1e-4):
 
 @njit
 def Fast_LeadLagllem_numba(y, Q_init, R_init, F_init, C, maxiter=3000, eps=1e-4):
-    """
-    Numba-compatible EM for Lead-Lag state-space model.
-    Dimensions and math identical to original LeadLagllem.
-    Adds defensive checks and jitter to avoid NaNs/Infs.
-    """
+    # Numba-compatible EM for Lead-Lag state-space model.
+    # Dimensions and math identical to original LeadLagllem.
+    # Adds defensive checks and jitter to avoid NaNs/Infs.
 
     # Ensure float64 copies
     Q = Q_init.astype(np.float64).copy()
